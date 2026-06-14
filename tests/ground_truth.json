@@ -1,0 +1,55 @@
+{
+  "description": "Ground truth labels for seven-segment display OCR test images",
+  "images": [
+    {
+      "file": "0502.jpg",
+      "value": "1077",
+      "display_type": "tank_gauge",
+      "notes": "Propane/fuel tank display labeled 'CAPACITY REMAINING', value in gallons"
+    },
+    {
+      "file": "2013meax1g981.jpg",
+      "value": "0.68",
+      "display_type": "multimeter",
+      "notes": "ANENG DT-9205A digital multimeter"
+    },
+    {
+      "file": "68f79706-7dd3-4d7d-8247-5fda7366da14.c3a5d25cda7dbc2795f37d0bff316e8d.jpeg",
+      "value": "123456789012",
+      "display_type": "calculator",
+      "notes": "12-digit calculator display showing sequential digits 1–9 then 0, 1, 2"
+    },
+    {
+      "file": "dVv50.jpg",
+      "value": "156311",
+      "display_type": "security_token",
+      "notes": "RSA SecurID hardware token; display renders as two groups '156 311' but value is the 6-digit OTP"
+    },
+    {
+      "file": "getting-weird-messages-from-my-gas-pump-v0-wwjamtn0tzyg1.webp",
+      "value": "86.47\n14.659",
+      "rows": ["86.47", "14.659"],
+      "display_type": "gas_pump",
+      "notes": "Gas pump total display: $86.47 (price, top row), 14.659 gallons (bottom row)"
+    },
+    {
+      "file": "images.jpeg",
+      "value": "21:24",
+      "display_type": "microwave_clock",
+      "notes": "Microwave oven clock in 24-hour format"
+    },
+    {
+      "file": "jai5qyznvjky.jpg",
+      "value": "29.29\n13.318",
+      "rows": ["29.29", "13.318"],
+      "display_type": "gas_pump",
+      "notes": "Shell gas pump 'This Sale' display: $29.29 (price, top row), 13.318 gallons (bottom row)"
+    },
+    {
+      "file": "spr-dreamsky-small-digital-alarm-clock-shannon-hansen-day-07-e2a02c3024284199b116f67d4107c28b.jpeg",
+      "value": "2:47",
+      "display_type": "alarm_clock",
+      "notes": "Digital alarm clock, 2:47 PM (PM indicator visible)"
+    }
+  ]
+}

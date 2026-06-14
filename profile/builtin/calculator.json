@@ -1,0 +1,16 @@
+{
+  "name": "calculator",
+  "polarity": "dark_on_light",
+  "charset": "decimal",
+  "expected_rows": 1,
+  "min_digits": 6,
+  "max_digits": 16,
+  "has_colon": false,
+  "has_decimal": true,
+  "one_ratio": 4.0,
+  "minus_ratio": 0.5,
+  "dec_h_ratio": 0.4,
+  "dec_w_ratio": 0.4,
+  "typical_aspect": 5.0,
+  "aspect_tolerance": 3.0
+}
