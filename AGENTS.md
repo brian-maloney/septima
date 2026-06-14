@@ -138,20 +138,37 @@ full image
 
 ---
 
-## Current test status (as of end of session)
+## Current test status (as of 2026-06-14)
 
 | Image | Display | Expected | Auto | Hinted |
 |---|---|---|---|---|
 | 2013meax1g981.jpg | multimeter | 0.68 | ✅ 0.68 | ✅ 0.68 |
 | images.jpeg | microwave_clock | 21:24 | ✅ 21:24 | ✅ 21:24 |
 | jai5qyznvjky.jpg | gas_pump | 29.29\n13.318 | ❌ 29.29\n13318 | ✅ 29.29\n13.318 |
-| 0502.jpg | tank_gauge | 1077 | ❌ ..1-:71C | ❌ 11715 |
+| 0502.jpg | tank_gauge | 1077 | ❌ ..1-:71C | ❌ 11712 |
 | dVv50.jpg | security_token | 156311 | ❌ -04- | ❌ 0 |
 | spr-dreamsky….jpeg | alarm_clock | 2:47 | ❌ 21:.47\n514:-. | ❌ 21147 |
-| getting-weird….webp | gas_pump | 86.47\n14.659 | ❌ .:8-\nd | ❌ .8-\n3 |
+| getting-weird….webp | gas_pump | 86.47\n14.659 | ❌ .:8-\nd | ❌ .8-\n2 |
 | 68f79706….jpeg | calculator | 123456789012 | ❌ 2\n4- | ❌ 4- |
 
 **Auto: 2/8 — Hinted: 3/8**
+
+---
+
+## Unit test suite (as of 2026-06-14)
+
+42 pure-Go unit tests across three files (no image files required):
+
+| File | Tests | What it covers |
+|---|---|---|
+| `decode/decode_test.go` | 12 | `hammingByte`, exact/nearest segment match (all 17 entries), `Decode` with every charset, `AspectClassify` edge cases, `AsciiArtSegments`, segment constant integrity |
+| `profile/profile_test.go` | 10 | `Get` for all 8 builtins, unknown-name fallback to generic, detailed field checks, `scoreProfile` (aspect + digit count), `AutoSelect` |
+| `options_test.go` | 18 | `defaultOptions`, every `With*` functional option, `applyProfile` for multimeter/microwave_clock/unknown, `toDecodeCharset`, combined option application |
+
+Run with:
+```bash
+PKG_CONFIG_PATH=$(brew --prefix opencv)/lib/pkgconfig go test ./decode/ ./profile/ github.com/vond/septima -timeout 60s
+```
 
 ---
 
