@@ -339,9 +339,9 @@ func zeroBorder(src gocv.Mat) gocv.Mat {
 	dst := src.Clone()
 
 	// Hard margin: zero the outermost pixels unconditionally.
-	margin := src.Rows() / 20
-	if margin < 4 {
-		margin = 4
+	margin := src.Rows() / 30 // ~3.3% of height — tight enough to remove bezel
+	if margin < 3 {
+		margin = 3
 	}
 	rows, cols := dst.Rows(), dst.Cols()
 	for r := 0; r < margin; r++ {

@@ -227,7 +227,11 @@ func detectColons(boxes []DigitBox, medianH int) []DigitBox {
 			iCY := (boxes[i].Bounds.Min.Y + boxes[i].Bounds.Max.Y) / 2
 			jCY := (boxes[j].Bounds.Min.Y + boxes[j].Bounds.Max.Y) / 2
 			dy := abs_int(iCY - jCY)
-			if dy > medianH/5 && dy < medianH {
+			minDy := medianH / 8
+			if minDy < 3 {
+				minDy = 3
+			}
+			if dy > minDy && dy < medianH {
 				minX := min_int(boxes[i].Bounds.Min.X, boxes[j].Bounds.Min.X)
 				maxX := max_int(boxes[i].Bounds.Max.X, boxes[j].Bounds.Max.X)
 				minY := min_int(boxes[i].Bounds.Min.Y, boxes[j].Bounds.Min.Y)

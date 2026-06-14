@@ -159,18 +159,22 @@ func forceBandCount(bands []band, proj []int, want, totalRows int) []band {
 		return result
 	}
 	if len(bands) > want {
-		// Keep the densest bands (by total pixel count).
+		// Keep the bands with the highest PEAK per-row density.
+		// Using peak (not total) means large-digit rows beat noisy reflection areas
+		// even when the reflection spans more rows overall.
 		type scored struct {
 			b     band
 			score int
 		}
 		var s []scored
 		for _, b := range bands {
-			total := 0
+			peak := 0
 			for r := b.start; r < b.end; r++ {
-				total += proj[r]
+				if proj[r] > peak {
+					peak = proj[r]
+				}
 			}
-			s = append(s, scored{b, total})
+			s = append(s, scored{b, peak})
 		}
 		sort.Slice(s, func(i, j int) bool { return s[i].score > s[j].score })
 		var result []band
