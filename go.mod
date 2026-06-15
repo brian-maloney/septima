@@ -1,4 +1,4 @@
-module github.com/vond/septima
+module github.com/brian-maloney/septima
 
 go 1.25
 

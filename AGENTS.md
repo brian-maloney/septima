@@ -138,20 +138,42 @@ full image
 
 ---
 
-## Current test status (as of 2026-06-14)
+## Current test status (as of 2026-06-14, third session)
 
 | Image | Display | Expected | Auto | Hinted |
 |---|---|---|---|---|
 | 2013meax1g981.jpg | multimeter | 0.68 | ✅ 0.68 | ✅ 0.68 |
 | images.jpeg | microwave_clock | 21:24 | ✅ 21:24 | ✅ 21:24 |
-| jai5qyznvjky.jpg | gas_pump | 29.29\n13.318 | ❌ 29.29\n13318 | ✅ 29.29\n13.318 |
-| 0502.jpg | tank_gauge | 1077 | ❌ ..1-:71C | ❌ 11712 |
-| dVv50.jpg | security_token | 156311 | ❌ -04- | ❌ 0 |
-| spr-dreamsky….jpeg | alarm_clock | 2:47 | ❌ 21:.47\n514:-. | ❌ 21147 |
-| getting-weird….webp | gas_pump | 86.47\n14.659 | ❌ .:8-\nd | ❌ .8-\n2 |
-| 68f79706….jpeg | calculator | 123456789012 | ❌ 2\n4- | ❌ 4- |
+| jai5qyznvjky.jpg | gas_pump | 29.29\n13.318 | ✅ 29.29\n13.318 | ✅ 29.29\n13.318 |
+| spr-dreamsky….jpeg | alarm_clock | 2:47 | ✅ 2:47 | ✅ 2:47 |
+| 0502.jpg | tank_gauge | 1077 | ❌ 1377 | ✅ 1077 |
+| dVv50.jpg | security_token | 156311 | ❌ -04- | ❌ 68 |
+| getting-weird….webp | gas_pump | 86.47\n14.659 | ❌ :8- | ❌ .8-\n2 |
+| 68f79706….jpeg | calculator | 123456789012 | ❌ 4- | ❌ 4- |
 
-**Auto: 2/8 — Hinted: 3/8**
+**Auto: 4/8 — Hinted: 5/8** (was 4/8 auto and 4/8 hinted in the second session).
+Tank gauge hinted now passes; tank gauge auto is closer (one-digit error) but still failing.
+
+### Fixes that landed in the second session
+
+- **Second-pass decimal reclassification in `detect/digits.go`** — after `mergeXOverlapping`, recompute the maximum post-merge digit height; any leftover merged "digit" component that is short enough to be a decimal is re-bucketed.  Guarded by `postMergeMaxH > medH*13/10` so it only fires when digits really did split into half-halves (otherwise it produced spurious decimals on noisy displays).  Fixes gas pump 2 auto's missing "13.318" decimal.
+- **`isDecimalShape` helper** — replaces the inline `aspectRatio < DecWRatio*3` check with a clamp of the upper aspect bound at 1.5, so square colon dots (aspect ≈ 1.0) are recognized as decimals even when a profile uses a small `DecWRatio`.  Necessary for alarm-clock colon detection.
+- **`shouldMerge` Y-containment merge** — `mergeXOverlapping` now also merges a narrow stub whose Y span is ≥80% contained inside a wider neighbour with non-negative X overlap.  Fixes a-half-of-"2" + isolated b-segment being treated as two boxes ("2" + "1").
+- **Profile-driven `HasDecimal`/`HasColon` filter (`septima.go`)** — `applyProfile` propagates these into `Options`, and the per-row pipeline drops unpaired decimals when the profile says `has_decimal=false` (alarm-clock AM/PM dots, alarm-bell icons, etc.).  Auto-mode equivalent: when a row contains a colon, drop any remaining isolated decimals (clock-style heuristic).
+- **`detect/rows.go` `filterByStructure`** — for auto-mode (`expectedRows==0`) bands, require the tallest CC to be ≥40% of band height AND ≥30% of the best band's tallest CC.  Discards scatter-noise bands that pass the density filter.  Fixes alarm-clock auto's phantom second row.
+
+### Fixes that landed in the third session (tank gauge hinted)
+
+- **`findDigitRowYRange` + per-row dense-Y clamp (`septima.go`)** — compute the row band's dense y-range from the aggregate horizontal projection (longest run of rows whose white-pixel count is ≥ `maxP/8`, clamped to ≥2).  Clamp each digit bbox's y-range to this strip and drop colon/decimal boxes that fall entirely outside it.  Fixes the tank-gauge "0" CC, which connects upward through a thin pixel path to the "CAPACITY" label after closing — the over-tall CC squeezed the digit into the bottom of its normalized canvas and made segment sampling fail (mask 0x10 → '1').  After clamp the mask is 0x3F → '0'.  Also drops the bright specks above the digit row that the colon detector pairs into spurious colons.
+- **X-proximity filter for cols/decimals (`septima.go`)** — a real colon or decimal sits next to a digit.  Drop col/dec boxes whose centre-x is more than one median digit width outside the digit cluster.  Removes the speck-pair colon on the left margin of the tank gauge ROI (which sits inside the dense y-range but far from the digit cluster).
+- **Y-alignment filter for digits (`septima.go`)** — drop non-decimal/non-colon boxes whose centre-y is more than `medianH/4` from the median digit centre.  Removes the "GAL" CC, which trims to about 70 % of digit height (so the 35 % rule keeps it) but rides ~40 px above the digit centreline.
+
+### Files touched
+
+- Second session: `detect/digits.go`, `detect/rows.go`, `septima.go`, `options.go`, `AGENTS.md`.
+- Third session: `septima.go` (added `abs`, `findDigitRowYRange`, dense-Y clamp + drop, X-proximity filter, Y-alignment filter), `AGENTS.md` (this update).
+
+No unit-test regressions: all 42 pure-Go tests still pass.  No integration-test regressions: every previously-passing image still passes; tank-gauge hinted is now a new pass.
 
 ---
 
@@ -181,10 +203,9 @@ PKG_CONFIG_PATH=$(brew --prefix opencv)/lib/pkgconfig go test ./decode/ ./profil
 - **Next step**: debug why `detectColons` (which successfully fires in auto) fails in the hinted single-band pass. Likely the `medH2` from merged digits is different when only one band is selected.
 
 ### Tank gauge (0502.jpg)
-- Binary is correct (white "1077" + labels on black).
-- The "CAPACITY REMAINING" and "GAL" labels create spurious components. Most are filtered (35% height rule, DecHRatio), but some survive.
-- Digit "0" and last "7" are decoded wrong — segment sampling issue with the small, blurry tank display.
-- **Next step**: inspect saved digit images (`-D /tmp/debug`) to see what the bounding boxes contain.
+- **Hinted now passes "1077"** — fixed in the third session via the dense-Y clamp + X-proximity + Y-alignment filters.
+- Auto returns "1377" — one-digit error: the "0" CC's right edge merges with a noise speck (via a thin pixel path absent in the hinted band crop), widening the bbox to `w=59` vs the hinted `w=50`.  The wider canvas shifts the segment-sampling windows so the right-vertical zone misses the "0" stroke and the decoder lands on "3" (mask 0x0d).
+- **Next step**: try cropping the row mask to the dense y-range *before* `SegmentDigits` runs.  A naive crop regressed microwave (lost the "1" of "21:24") — likely because the small ROI's per-row counts are themselves marginal against `maxP/8`.  A more conservative crop (e.g., only when the trim removes ≥30 % of the band height, or only when the row band is large) might give auto-mode tank without touching microwave.
 
 ### Gas pump 1 (getting-weird….webp)
 - ROI finds the correct display area, but heavy glass reflections destroy the binary — adaptive threshold fires but still noisy.

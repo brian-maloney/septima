@@ -7,7 +7,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/vond/septima"
+	"github.com/brian-maloney/septima"
 )
 
 type groundTruth struct {

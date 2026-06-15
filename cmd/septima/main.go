@@ -10,8 +10,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/vond/septima"
-	"github.com/vond/septima/preprocess"
+	"github.com/brian-maloney/septima"
+	"github.com/brian-maloney/septima/preprocess"
 )
 
 func main() {

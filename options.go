@@ -3,7 +3,7 @@ package septima
 import (
 	"image"
 
-	"github.com/vond/septima/preprocess"
+	"github.com/brian-maloney/septima/preprocess"
 )
 
 // Charset controls which characters are considered during lookup.
@@ -44,6 +44,17 @@ type Options struct {
 	DebugDir       string
 	PrintSpaces    bool
 	SpaceFactor    float64
+	// HasDecimal indicates the profile expects '.' characters in the output.
+	// When false, unpaired decimal-classified components are treated as noise
+	// and dropped after colon detection.
+	HasDecimal bool
+	// HasColon indicates the profile expects ':' characters in the output.
+	// When false, colon-paired components are split back into two separate
+	// digit candidates (and usually filtered as noise).
+	HasColon bool
+	// decimalExpectationSet tracks whether HasDecimal/HasColon were set
+	// (so absent profile keeps the legacy "everything is possible" behaviour).
+	decimalExpectationSet bool
 }
 
 func defaultOptions() Options {

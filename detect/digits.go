@@ -92,7 +92,7 @@ func SegmentDigits(rowBinary gocv.Mat, rowOffset int, opts DigitOptions) []Digit
 		w := c.rect.Dx()
 		heightRatio := float64(h) / float64(medH)
 		aspectRatio := float64(w) / float64(h)
-		if heightRatio < opts.DecHRatio && aspectRatio < opts.DecWRatio*3 {
+		if isDecimalShape(heightRatio, aspectRatio, opts) {
 			c.isDecimal = true
 			decimalComps = append(decimalComps, c)
 		} else {
@@ -102,6 +102,39 @@ func SegmentDigits(rowBinary gocv.Mat, rowOffset int, opts DigitOptions) []Digit
 
 	// Merge X-overlapping digit components (split digit halves).
 	mergedDigits := mergeXOverlapping(digitComps)
+
+	// Second-pass reclassification: now that we know real digit heights,
+	// a component initially classified as digit may actually be a decimal.
+	// The pre-merge medH can underestimate digit height when digits are split
+	// into two halves (e.g. "3" → top+bottom CCs each ~half the digit height).
+	postMergeMaxH := 0
+	for _, d := range mergedDigits {
+		if h := d.rect.Dy(); h > postMergeMaxH {
+			postMergeMaxH = h
+		}
+	}
+	// Only reclassify when the post-merge height is noticeably larger than
+	// the pre-merge median.  A 30% jump indicates that real digits were
+	// split into two CCs each (typical for clean LCD digits at the inter-
+	// segment gap), and the pre-merge medH was therefore too small to use as
+	// the decimal threshold.  Without this guard, second-pass reclassification
+	// turns small label fragments and reflection specks into spurious decimals.
+	if postMergeMaxH > medH*13/10 {
+		reclassified := mergedDigits[:0]
+		for _, c := range mergedDigits {
+			h := c.rect.Dy()
+			w := c.rect.Dx()
+			heightRatio := float64(h) / float64(postMergeMaxH)
+			aspectRatio := float64(w) / float64(h)
+			if isDecimalShape(heightRatio, aspectRatio, opts) {
+				c.isDecimal = true
+				decimalComps = append(decimalComps, c)
+			} else {
+				reclassified = append(reclassified, c)
+			}
+		}
+		mergedDigits = reclassified
+	}
 
 	// Combine merged digits with decimal candidates.
 	all := append(mergedDigits, decimalComps...)
@@ -166,11 +199,7 @@ func mergeXOverlapping(comps []classifiedComp) []classifiedComp {
 	for i := 1; i < len(comps); i++ {
 		cur := &merged[len(merged)-1]
 		next := comps[i]
-		overlap := cur.rect.Max.X - next.rect.Min.X
-		minW := min_int(cur.rect.Dx(), next.rect.Dx())
-		// Only merge when overlap is a significant fraction of the narrower width.
-		// Adjacent different digits have 0 or tiny negative overlap → don't merge.
-		if minW > 0 && float64(overlap)/float64(minW) > 0.40 {
+		if shouldMerge(*cur, next) {
 			cur.rect = image.Rect(
 				min_int(cur.rect.Min.X, next.rect.Min.X),
 				min_int(cur.rect.Min.Y, next.rect.Min.Y),
@@ -183,6 +212,57 @@ func mergeXOverlapping(comps []classifiedComp) []classifiedComp {
 		}
 	}
 	return merged
+}
+
+// shouldMerge decides whether two digit-components are halves of the same
+// 7-segment character.
+//
+// Two criteria, either of which is sufficient:
+//
+//  1. Substantial X-overlap (≥40% of the narrower width).  If the two
+//     components have no Y-overlap (one is stacked above the other), also
+//     require that the smaller component's pixel area is at least 25% of
+//     the larger's — this rejects merging a small label-text fragment into
+//     a tall digit body when both happen to be x-aligned but the label
+//     sits clearly above the digit.  Stacked CCs with similar areas are
+//     the typical top/bottom halves of a digit split by the inter-segment
+//     gap, so they pass.
+//
+//  2. Narrow stub fully Y-contained within a wider neighbour AND the X edges
+//     touch or overlap.  Handles a single b- or e-segment that didn't connect
+//     to the main "L" shape of the digit (e.g., "2" with isolated top-right
+//     vertical bar that is narrower than the rest of the digit).
+func shouldMerge(cur, next classifiedComp) bool {
+	overlap := cur.rect.Max.X - next.rect.Min.X
+	minW := min_int(cur.rect.Dx(), next.rect.Dx())
+	if minW > 0 && float64(overlap)/float64(minW) > 0.40 {
+		yOverlap := min_int(cur.rect.Max.Y, next.rect.Max.Y) -
+			max_int(cur.rect.Min.Y, next.rect.Min.Y)
+		if yOverlap > 0 {
+			return true
+		}
+		minA := min_int(cur.area, next.area)
+		maxA := max_int(cur.area, next.area)
+		if maxA > 0 && float64(minA)/float64(maxA) >= 0.25 {
+			return true
+		}
+		return false
+	}
+	// Narrow-stub merge: require X overlap or near-touching, narrow next,
+	// and Y span of next mostly contained in cur.
+	if overlap < -2 { // > 2-pixel horizontal gap → not the same digit
+		return false
+	}
+	if next.rect.Dx()*3 > cur.rect.Dx() { // not narrow enough
+		return false
+	}
+	yOverlap := min_int(cur.rect.Max.Y, next.rect.Max.Y) -
+		max_int(cur.rect.Min.Y, next.rect.Min.Y)
+	minH := min_int(cur.rect.Dy(), next.rect.Dy())
+	if minH <= 0 {
+		return false
+	}
+	return float64(yOverlap)/float64(minH) > 0.80
 }
 
 func medianCompHeight(comps []classifiedComp, rowH int) int {
@@ -312,4 +392,22 @@ func abs_int(x int) int {
 		return -x
 	}
 	return x
+}
+
+// isDecimalShape returns true if a component is short enough to be a decimal
+// dot or colon dot and not so wide that it must be a minus sign.
+//
+// heightRatio is h/refH (refH is the digit height reference: median or max).
+// aspectRatio is w/h.  The lower bound on max aspect (1.5) ensures that
+// square colon dots (aspect ≈ 1.0) are admitted even when a profile chose a
+// very small DecWRatio.
+func isDecimalShape(heightRatio, aspectRatio float64, opts DigitOptions) bool {
+	if heightRatio >= opts.DecHRatio {
+		return false
+	}
+	maxAspect := opts.DecWRatio * 3
+	if maxAspect < 1.5 {
+		maxAspect = 1.5
+	}
+	return aspectRatio < maxAspect
 }

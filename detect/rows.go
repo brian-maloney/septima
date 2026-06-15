@@ -25,6 +25,16 @@ func SplitRows(binary gocv.Mat, expectedRows int) []RowRegion {
 	// or noise from reflections).
 	bands = filterByDensity(bands, proj, binary.Cols())
 
+	// Auto-mode structural filter: a band must contain at least one connected
+	// component whose height is a significant fraction of the band height.
+	// This rejects bands of pure scatter noise (reflections, speckle) that
+	// happen to have enough total pixel density to pass filterByDensity.
+	// Skip when expectedRows is set so callers can still recover digit rows
+	// from low-quality binaries by forcing a band count.
+	if expectedRows == 0 && len(bands) > 1 {
+		bands = filterByStructure(bands, binary)
+	}
+
 	// If we have an expectation, enforce it.
 	if expectedRows > 0 && len(bands) != expectedRows {
 		bands = forceBandCount(bands, proj, expectedRows, binary.Rows())
@@ -145,6 +155,60 @@ func filterByDensity(bands []band, proj []int, cols int) []band {
 	}
 	if len(result) == 0 {
 		return bands // safety fallback
+	}
+	return result
+}
+
+// filterByStructure drops bands whose tallest connected component is much
+// shorter than the band height itself.  A real digit row's tallest CC nearly
+// spans the band height; a noise band's CCs are scattered specks.
+func filterByStructure(bands []band, binary gocv.Mat) []band {
+	if len(bands) == 0 {
+		return bands
+	}
+	tallest := make([]int, len(bands))
+	bestTallest := 0
+	for i, b := range bands {
+		h := b.end - b.start
+		if h <= 0 {
+			continue
+		}
+		rect := image.Rect(0, b.start, binary.Cols(), b.end)
+		sub := binary.Region(rect)
+		labels := gocv.NewMat()
+		stats := gocv.NewMat()
+		centroids := gocv.NewMat()
+		n := gocv.ConnectedComponentsWithStats(sub, &labels, &stats, &centroids)
+		maxH := 0
+		for k := 1; k < n; k++ {
+			hk := int(stats.GetIntAt(k, ccHeight))
+			if hk > maxH {
+				maxH = hk
+			}
+		}
+		labels.Close()
+		stats.Close()
+		centroids.Close()
+		sub.Close()
+		tallest[i] = maxH
+		if maxH > bestTallest {
+			bestTallest = maxH
+		}
+	}
+	if bestTallest == 0 {
+		return bands
+	}
+	var result []band
+	for i, b := range bands {
+		h := b.end - b.start
+		// Require the tallest CC to be at least 40% of the band height AND at
+		// least 30% of the best band's tallest CC.  Either alone is too weak.
+		if h > 0 && tallest[i]*5 >= h*2 && tallest[i]*10 >= bestTallest*3 {
+			result = append(result, b)
+		}
+	}
+	if len(result) == 0 {
+		return bands
 	}
 	return result
 }

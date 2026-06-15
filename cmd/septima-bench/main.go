@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/vond/septima"
+	"github.com/brian-maloney/septima"
 )
 
 type groundTruth struct {

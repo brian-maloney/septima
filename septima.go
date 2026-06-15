@@ -8,15 +8,16 @@ import (
 	"image"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"gocv.io/x/gocv"
 
-	"github.com/vond/septima/decode"
-	"github.com/vond/septima/detect"
-	"github.com/vond/septima/dnn"
-	"github.com/vond/septima/preprocess"
-	"github.com/vond/septima/profile"
+	"github.com/brian-maloney/septima/decode"
+	"github.com/brian-maloney/septima/detect"
+	"github.com/brian-maloney/septima/dnn"
+	"github.com/brian-maloney/septima/preprocess"
+	"github.com/brian-maloney/septima/profile"
 )
 
 // ReadFile reads an image from disk and recognizes its seven-segment display.
@@ -187,6 +188,41 @@ func ReadMat(m gocv.Mat, userOpts ...Option) (*Result, error) {
 	for ri, rr := range rowRegions {
 		digitBoxes := detect.SegmentDigits(rr.Mask, rr.Bounds.Min.Y, digitOpts)
 
+		// Establish the row band's dense y-range from the aggregate horizontal
+		// projection.  Two uses follow:
+		//   1. Clamp each digit bbox to this strip — a digit CC can extend far
+		//      above the digit when label text connects to it via a thin pixel
+		//      path (e.g., tank-gauge "CAPACITY" connecting down to the "0").
+		//   2. Drop colon/decimal boxes that fall entirely outside the strip —
+		//      stray bright specs in label rows can be paired by
+		//      detectColonsSingleDot into spurious colons.
+		denseY0, denseY1 := findDigitRowYRange(rr.Mask, rr.Bounds.Min.Y)
+		{
+			var kept []detect.DigitBox
+			for _, db := range digitBoxes {
+				if db.IsDecimal || db.IsColon {
+					if db.Bounds.Max.Y < denseY0 || db.Bounds.Min.Y > denseY1 {
+						continue
+					}
+					kept = append(kept, db)
+					continue
+				}
+				bb := db.Bounds
+				y0 := bb.Min.Y
+				if y0 < denseY0 {
+					y0 = denseY0
+				}
+				y1 := bb.Max.Y
+				if y1 > denseY1 {
+					y1 = denseY1
+				}
+				if y1 > y0 {
+					db.Bounds = image.Rect(bb.Min.X, y0, bb.Max.X, y1)
+				}
+				kept = append(kept, db)
+			}
+			digitBoxes = kept
+		}
 		// Post-filter: remove boxes whose height is < 35% of the tallest non-decimal
 		// digit in this row.  This eliminates label text, "GAL", "CAPACITY" etc.
 		// Decimal/colon candidates are exempt (they're inherently short).
@@ -204,6 +240,124 @@ func ReadMat(m gocv.Mat, userOpts ...Option) (*Result, error) {
 					if db.IsDecimal || db.IsColon || db.Bounds.Dy() >= threshold {
 						filtered = append(filtered, db)
 					}
+				}
+				digitBoxes = filtered
+			}
+		}
+
+		// X-proximity filter for colons/decimals: a real colon or decimal
+		// sits next to a digit (between two of them, or just past the last
+		// one).  Stray bright specs that pass the colon/decimal classifier
+		// but live far from the digit cluster — e.g., the speck pair on the
+		// left margin of the tank gauge display — should be dropped.
+		{
+			medW := 0
+			digitMinX, digitMaxX := -1, -1
+			for _, db := range digitBoxes {
+				if db.IsDecimal || db.IsColon {
+					continue
+				}
+				if w := db.Bounds.Dx(); w > medW {
+					medW = w
+				}
+				if digitMinX < 0 || db.Bounds.Min.X < digitMinX {
+					digitMinX = db.Bounds.Min.X
+				}
+				if db.Bounds.Max.X > digitMaxX {
+					digitMaxX = db.Bounds.Max.X
+				}
+			}
+			if medW > 0 && digitMinX >= 0 {
+				margin := medW
+				var kept []detect.DigitBox
+				for _, db := range digitBoxes {
+					if db.IsDecimal || db.IsColon {
+						cx := (db.Bounds.Min.X + db.Bounds.Max.X) / 2
+						if cx < digitMinX-margin || cx > digitMaxX+margin {
+							continue
+						}
+					}
+					kept = append(kept, db)
+				}
+				digitBoxes = kept
+			}
+		}
+
+		// Y-alignment filter: a real row of 7-segment digits has all digits
+		// vertically aligned (their bounding-box centres on a common Y).
+		// Anything significantly above or below that centreline is label text
+		// or icon noise that survived earlier filters (e.g., tank-gauge "GAL"
+		// fragment, which is shorter and rides higher than the digit row).
+		// Decimal/colon boxes are exempt — they sit at the edges by design.
+		{
+			var centres []int
+			var medH int
+			for _, db := range digitBoxes {
+				if db.IsDecimal || db.IsColon {
+					continue
+				}
+				centres = append(centres, (db.Bounds.Min.Y+db.Bounds.Max.Y)/2)
+				if h := db.Bounds.Dy(); h > medH {
+					medH = h
+				}
+			}
+			if len(centres) >= 3 && medH > 0 {
+				sortedC := append([]int(nil), centres...)
+				sort.Ints(sortedC)
+				medianY := sortedC[len(sortedC)/2]
+				tolerance := medH / 4
+				if tolerance < 6 {
+					tolerance = 6
+				}
+				var filtered []detect.DigitBox
+				for _, db := range digitBoxes {
+					if db.IsDecimal || db.IsColon {
+						filtered = append(filtered, db)
+						continue
+					}
+					cy := (db.Bounds.Min.Y + db.Bounds.Max.Y) / 2
+					if abs(cy-medianY) <= tolerance {
+						filtered = append(filtered, db)
+					}
+				}
+				digitBoxes = filtered
+			}
+		}
+
+		// Profile-driven filter: when a profile says the display has no
+		// decimal points, drop any isolated decimals (typically AM/PM indicator
+		// dots, alarm-bell icons, or stray reflection specks).  Same idea for
+		// unexpected colons.
+		if opts.decimalExpectationSet {
+			var filtered []detect.DigitBox
+			for _, db := range digitBoxes {
+				if db.IsDecimal && !opts.HasDecimal {
+					continue
+				}
+				if db.IsColon && !opts.HasColon {
+					continue
+				}
+				filtered = append(filtered, db)
+			}
+			digitBoxes = filtered
+		} else {
+			// No profile guidance: a row that contains a colon almost always
+			// belongs to a clock-style display.  Lone decimal dots in such a
+			// row are usually AM/PM indicators, not decimal points, so drop them.
+			hasColon := false
+			for _, db := range digitBoxes {
+				if db.IsColon {
+					hasColon = true
+					break
+				}
+			}
+			if hasColon {
+				var filtered []detect.DigitBox
+				for _, db := range digitBoxes {
+					if db.IsDecimal {
+						continue
+					}
+					filtered = append(filtered, db)
 				}
 				digitBoxes = filtered
 			}
@@ -328,6 +482,79 @@ func ReadMat(m gocv.Mat, userOpts ...Option) (*Result, error) {
 }
 
 // ── internal helpers ──────────────────────────────────────────────────────
+
+func abs(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
+// findDigitRowYRange identifies the y-range within rowMask (a row-band binary
+// image, top-left at rowOffset in the parent image) that contains the actual
+// digit content, separating it from label text or noise above/below.
+//
+// Motivation: connected-component analysis on the band can return a digit
+// bbox much taller than the digit itself when a thin pixel path links the
+// digit upward to label text (e.g., tank-gauge "CAPACITY" letters connecting
+// down to the top of a "0").  Looking at horizontal projection across the
+// full row width is more reliable than per-bbox analysis, because individual
+// digits can have legitimate empty-row gaps (the inter-segment gap inside
+// "0" / "8") while the aggregate projection over several aligned digits is
+// non-zero throughout the true digit row.
+//
+// Algorithm: compute the per-row sum of white pixels across the full row
+// width, mark rows whose count clears max(2, maxCount/8) as active, and
+// return the longest contiguous active run as the digit-content y-range in
+// image coordinates.  Returns (rowOffset, rowOffset+rowMask.Rows()) when the
+// run analysis is inconclusive.
+func findDigitRowYRange(rowMask gocv.Mat, rowOffset int) (int, int) {
+	h := rowMask.Rows()
+	if h <= 0 {
+		return rowOffset, rowOffset + h
+	}
+	proj := make([]int, h)
+	maxP := 0
+	cols := rowMask.Cols()
+	for r := 0; r < h; r++ {
+		count := 0
+		for c := 0; c < cols; c++ {
+			if rowMask.GetUCharAt(r, c) > 0 {
+				count++
+			}
+		}
+		proj[r] = count
+		if count > maxP {
+			maxP = count
+		}
+	}
+	if maxP == 0 {
+		return rowOffset, rowOffset + h
+	}
+	threshold := maxP / 8
+	if threshold < 2 {
+		threshold = 2
+	}
+	bestStart, bestLen := 0, 0
+	curStart, curLen := 0, 0
+	for r := 0; r < h; r++ {
+		if proj[r] >= threshold {
+			if curLen == 0 {
+				curStart = r
+			}
+			curLen++
+			if curLen > bestLen {
+				bestStart, bestLen = curStart, curLen
+			}
+		} else {
+			curLen = 0
+		}
+	}
+	if bestLen <= 0 || bestLen == h {
+		return rowOffset, rowOffset + h
+	}
+	return rowOffset + bestStart, rowOffset + bestStart + bestLen
+}
 
 // zeroBorder removes white regions that touch the image border — these are
 // typically bezel/frame artifacts from the polarity inversion step.
@@ -511,4 +738,10 @@ func applyProfile(opts *Options, name string) {
 	if p.DecWRatio > 0 {
 		opts.DecWRatio = p.DecWRatio
 	}
+	// HasColon/HasDecimal are taken straight from the profile; the
+	// decimalExpectationSet flag distinguishes "profile applied" from
+	// "no profile / legacy permissive behaviour".
+	opts.HasColon = p.HasColon
+	opts.HasDecimal = p.HasDecimal
+	opts.decimalExpectationSet = true
 }

@@ -4,7 +4,7 @@ import (
 	"image"
 	"testing"
 
-	"github.com/vond/septima/preprocess"
+	"github.com/brian-maloney/septima/preprocess"
 )
 
 func TestDefaultOptions(t *testing.T) {
