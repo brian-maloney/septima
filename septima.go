@@ -74,6 +74,7 @@ func ReadMat(m gocv.Mat, userOpts ...Option) (*Result, error) {
 	//       edge bridges and destroy digits along with the bezel artefact.
 	var working gocv.Mat
 	refined := false
+	rectified := false
 	if opts.ROI != nil {
 		region := m.Region(*opts.ROI)
 		working = region.Clone()
@@ -121,7 +122,41 @@ func ReadMat(m gocv.Mat, userOpts ...Option) (*Result, error) {
 		} else {
 			working = outer
 		}
-		if refined && opts.Polarity == PolarityAuto {
+
+		// Fallback: when refinement found no LCD strip and the device is
+		// photographed at a strong tilt, attempt perspective rectification
+		// of the device-level ROI.  Calculator-style shots (large bezel,
+		// thin LCD strip in the middle, no internal contour structure for
+		// RefineDisplayROI to latch onto) need this path.  The tilt gate is
+		// deliberately high (>= 15°) — moderately-tilted shots like alarm
+		// clocks (~12°) decode correctly without rectification, and the
+		// quad-detection occasionally fits the wrong lines on those.
+		if !refined && opts.Polarity != PolarityLightOnDark {
+			rectMat, info := detect.RectifyPerspectiveDetailed(m, roi)
+			if info.Applied && info.MaxTiltDeg >= 15.0 {
+				// Trim to the dark LCD band: the quad detected here is
+				// typically the whole device, so the rectified output
+				// still contains bright case pixels above and below the
+				// LCD strip that confuse row segmentation.  Restricting
+				// to dark-on-light polarity (and only when no LightOnDark
+				// hint is set) keeps the dark-band heuristic correct.
+				working.Close()
+				y0, y1 := cropToDarkBand(rectMat)
+				if y0 > 0 || y1 < rectMat.Rows() {
+					bandRegion := rectMat.Region(image.Rect(0, y0, rectMat.Cols(), y1))
+					working = bandRegion.Clone()
+					bandRegion.Close()
+					rectMat.Close()
+				} else {
+					working = rectMat
+				}
+				rectified = true
+			} else {
+				rectMat.Close()
+			}
+		}
+
+		if (refined || rectified) && opts.Polarity == PolarityAuto {
 			opts.Polarity = PolarityDarkOnLight
 		}
 	}
@@ -198,7 +233,7 @@ func ReadMat(m gocv.Mat, userOpts ...Option) (*Result, error) {
 	// real digits via thin pixel bridges, and flooding the artefact destroys
 	// the digit).  Use the hard-margin-only variant in that case.
 	var binary gocv.Mat
-	if refined {
+	if refined || rectified {
 		binary = zeroBorderHard(binaryInv)
 	} else {
 		binary = zeroBorder(binaryInv)
@@ -303,6 +338,77 @@ func ReadMat(m gocv.Mat, userOpts ...Option) (*Result, error) {
 			}
 		}
 
+		// Edge-bargraph filter: a non-digit element at the LCD's left or
+		// right margin can survive as a tall narrow CC whose aspect h/w >
+		// opts.OneRatio, so AspectClassify would emit a phantom '1'.
+		// Example: the time-remaining bar-graph on the RSA SecurID fob.
+		//
+		// Identify it as the leftmost (or rightmost) non-decimal CC that
+		// is BOTH significantly narrower than the row's "wide-digit" width
+		// AND separated from its inward neighbour by a gap that exceeds
+		// typical inter-digit spacing.  Using the median of the upper half
+		// of widths as the reference makes the filter robust against the
+		// existence of legitimately narrow '1' digits in the same row —
+		// a real '1' fails the gap test because it sits at normal digit
+		// spacing from its neighbour (tank gauge "1077", gas pump "13.318").
+		{
+			var edgeIdxs []int
+			var widths []int
+			for i, db := range digitBoxes {
+				if db.IsDecimal || db.IsColon {
+					continue
+				}
+				edgeIdxs = append(edgeIdxs, i)
+				widths = append(widths, db.Bounds.Dx())
+			}
+			if len(edgeIdxs) >= 3 {
+				sortedW := append([]int(nil), widths...)
+				sort.Ints(sortedW)
+				// Median of the upper half of widths — biases toward the
+				// width of "real" digits (5, 6, 8, 0…) and away from thin
+				// '1' digits and bezel-noise sub-boxes.
+				upper := sortedW[len(sortedW)/2:]
+				wideW := upper[len(upper)/2]
+				sort.SliceStable(edgeIdxs, func(i, j int) bool {
+					return digitBoxes[edgeIdxs[i]].Bounds.Min.X <
+						digitBoxes[edgeIdxs[j]].Bounds.Min.X
+				})
+				toDrop := map[int]bool{}
+				check := func(edgeI, neighbourI int, leftEdge bool) {
+					eb := digitBoxes[edgeI].Bounds
+					nb := digitBoxes[neighbourI].Bounds
+					var gap int
+					if leftEdge {
+						gap = nb.Min.X - eb.Max.X
+					} else {
+						gap = eb.Min.X - nb.Max.X
+					}
+					w := eb.Dx()
+					h := eb.Dy()
+					if w == 0 {
+						return
+					}
+					aspectHW := float64(h) / float64(w)
+					if aspectHW > opts.OneRatio &&
+						w*100 < wideW*55 &&
+						gap*10 > wideW*8 {
+						toDrop[edgeI] = true
+					}
+				}
+				check(edgeIdxs[0], edgeIdxs[1], true)
+				check(edgeIdxs[len(edgeIdxs)-1], edgeIdxs[len(edgeIdxs)-2], false)
+				if len(toDrop) > 0 {
+					var filtered []detect.DigitBox
+					for i, db := range digitBoxes {
+						if !toDrop[i] {
+							filtered = append(filtered, db)
+						}
+					}
+					digitBoxes = filtered
+				}
+			}
+		}
+
 		// X-proximity filter for colons/decimals: a real colon or decimal
 		// sits next to a digit (between two of them, or just past the last
 		// one).  Stray bright specs that pass the colon/decimal classifier
@@ -379,6 +485,71 @@ func ReadMat(m gocv.Mat, userOpts ...Option) (*Result, error) {
 					}
 				}
 				digitBoxes = filtered
+			}
+		}
+
+		// Bezel-line cluster filter: top/bottom edges of the LCD often leak
+		// through polarity inversion as a horizontal row of small decimal-
+		// shaped CCs (e.g., the RSA SecurID auto path has 3 such specks at
+		// the top edge and 3 at the bottom).  If 3 or more decimal/colon
+		// boxes cluster within a narrow y-band, treat the cluster as bezel
+		// noise and drop them all.  Real displays have at most 1–2 decimals
+		// per row, and colons are pre-paired into a single box, so legitimate
+		// clusters of 3+ on the same y-line don't occur in practice.
+		{
+			medH := 0
+			for _, db := range digitBoxes {
+				if !db.IsDecimal && !db.IsColon {
+					if h := db.Bounds.Dy(); h > medH {
+						medH = h
+					}
+				}
+			}
+			if medH > 0 {
+				tol := medH / 10
+				if tol < 4 {
+					tol = 4
+				}
+				type smallBox struct {
+					idx int
+					cy  int
+				}
+				var smalls []smallBox
+				for i, db := range digitBoxes {
+					if db.IsDecimal || db.IsColon {
+						smalls = append(smalls, smallBox{
+							idx: i,
+							cy:  (db.Bounds.Min.Y + db.Bounds.Max.Y) / 2,
+						})
+					}
+				}
+				sort.Slice(smalls, func(i, j int) bool {
+					return smalls[i].cy < smalls[j].cy
+				})
+				toDrop := map[int]bool{}
+				n := len(smalls)
+				i := 0
+				for i < n {
+					j := i
+					for j+1 < n && smalls[j+1].cy-smalls[i].cy <= tol {
+						j++
+					}
+					if j-i+1 >= 3 {
+						for k := i; k <= j; k++ {
+							toDrop[smalls[k].idx] = true
+						}
+					}
+					i = j + 1
+				}
+				if len(toDrop) > 0 {
+					var filtered []detect.DigitBox
+					for i, db := range digitBoxes {
+						if !toDrop[i] {
+							filtered = append(filtered, db)
+						}
+					}
+					digitBoxes = filtered
+				}
 			}
 		}
 
@@ -612,6 +783,90 @@ func findDigitRowYRange(rowMask gocv.Mat, rowOffset int) (int, int) {
 		return rowOffset, rowOffset + h
 	}
 	return rowOffset + bestStart, rowOffset + bestStart + bestLen
+}
+
+// cropToDarkBand finds the darkest contiguous horizontal band in a (possibly
+// colour) image and returns the y-range [y0, y1) of that band, or (0, rows)
+// when no clear band is detected.  Used after perspective rectification to
+// trim the device case area away from a dark LCD strip — the rectified ROI
+// for a calculator/large-device shot still contains bright case pixels above
+// and below the LCD that confuse row segmentation downstream.
+//
+// Algorithm: convert to gray, compute row-mean intensities, find the longest
+// contiguous run where row-mean is below (rowMeanMax+rowMeanMin)/2 minus a
+// small bias.  The band must be at least 8% of image height and must be at
+// least 25% darker than the brightest row; otherwise return the full range
+// (the input is already a clean LCD-only ROI or has no LCD band to find).
+func cropToDarkBand(src gocv.Mat) (int, int) {
+	rows := src.Rows()
+	cols := src.Cols()
+	if rows < 30 || cols < 30 {
+		return 0, rows
+	}
+	gray := gocv.NewMat()
+	defer gray.Close()
+	if src.Channels() > 1 {
+		gocv.CvtColor(src, &gray, gocv.ColorBGRToGray)
+	} else {
+		gray = src.Clone()
+	}
+	means := make([]float64, rows)
+	minMean := 255.0
+	maxMean := 0.0
+	for r := 0; r < rows; r++ {
+		sum := 0.0
+		for c := 0; c < cols; c++ {
+			sum += float64(gray.GetUCharAt(r, c))
+		}
+		m := sum / float64(cols)
+		means[r] = m
+		if m < minMean {
+			minMean = m
+		}
+		if m > maxMean {
+			maxMean = m
+		}
+	}
+	if maxMean-minMean < 64 {
+		return 0, rows
+	}
+	threshold := (minMean + maxMean) / 2
+	bestStart, bestEnd := 0, 0
+	curStart := -1
+	for r := 0; r < rows; r++ {
+		if means[r] < threshold {
+			if curStart < 0 {
+				curStart = r
+			}
+		} else {
+			if curStart >= 0 {
+				if r-curStart > bestEnd-bestStart {
+					bestStart, bestEnd = curStart, r
+				}
+				curStart = -1
+			}
+		}
+	}
+	if curStart >= 0 && rows-curStart > bestEnd-bestStart {
+		bestStart, bestEnd = curStart, rows
+	}
+	bandH := bestEnd - bestStart
+	if bandH < rows/12 {
+		return 0, rows
+	}
+	pad := bandH / 8
+	if pad < 4 {
+		pad = 4
+	}
+	y0 := bestStart - pad
+	if y0 < 0 {
+		y0 = 0
+	}
+	y1 := bestEnd + pad
+	if y1 > rows {
+		y1 = rows
+	}
+	return y0, y1
 }
 
 // zeroBorderHard zeros a hard margin around the image without doing any

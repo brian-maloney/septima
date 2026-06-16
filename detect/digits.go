@@ -81,8 +81,17 @@ func SegmentDigits(rowBinary gocv.Mat, rowOffset int, opts DigitOptions) []Digit
 		})
 	}
 
-	// Compute median height of "large" components (digit halves or full digits).
 	rowH := rowBinary.Rows()
+
+	// Some CCs span multiple digits because polarity inversion brought in
+	// bezel noise that bridges adjacent digits into a single connected
+	// component.  Detect via width > 1.5x median digit width AND being a tall
+	// component (not a tiny decimal), then split at column-projection valleys.
+	// Narrow column-peaks (less than ~medW/3 wide) and peaks that do not
+	// extend close to full row height are discarded as bezel artefacts.
+	comps = splitWideMergedDigits(comps, rowBinary, rowOffset)
+
+	// Compute median height of "large" components (digit halves or full digits).
 	medH := medianCompHeight(comps, rowH)
 
 	// Classify: decimal candidates vs digit components.
@@ -377,14 +386,205 @@ func detectColonsSingleDot(boxes []DigitBox, rowBinary gocv.Mat, rowOffset, medi
 				}
 			}
 		}
-		// If the sample area has enough white pixels, treat this decimal as a colon.
 		sampleArea := 5 * (x1 - x0 + 1)
-		if sampleArea > 0 && float64(whiteCount)/float64(sampleArea) > 0.20 {
-			boxes[i].IsColon = true
-			boxes[i].IsDecimal = false
+		if sampleArea == 0 || float64(whiteCount)/float64(sampleArea) <= 0.20 {
+			continue
 		}
+
+		// Stroke-rejection check: sample narrow bands ABOVE and BELOW the
+		// partner position at a tight x window centred on cx.  For a real
+		// isolated colon dot, the regions ~medianH/6 above and below the
+		// dot are empty (inter-dot gap and the space below the lower dot).
+		// For a continuous vertical stroke (e.g., an upper-bezel speck whose
+		// predicted partner lands inside the next digit's vertical stroke),
+		// both regions remain densely white — that pattern is what we reject.
+		dyOff := medianH / 6
+		if dyOff < 6 {
+			dyOff = 6
+		}
+		nx0 := cx - 1
+		if nx0 < 0 {
+			nx0 = 0
+		}
+		nx1 := cx + 1
+		if nx1 >= rowBinary.Cols() {
+			nx1 = rowBinary.Cols() - 1
+		}
+		strokeAbove, strokeBelow := 0, 0
+		for dy := -1; dy <= 1; dy++ {
+			rA := cyLower - dyOff + dy
+			rB := cyLower + dyOff + dy
+			if rA >= 0 && rA < rowBinary.Rows() {
+				for c := nx0; c <= nx1; c++ {
+					if rowBinary.GetUCharAt(rA, c) > 0 {
+						strokeAbove++
+					}
+				}
+			}
+			if rB >= 0 && rB < rowBinary.Rows() {
+				for c := nx0; c <= nx1; c++ {
+					if rowBinary.GetUCharAt(rB, c) > 0 {
+						strokeBelow++
+					}
+				}
+			}
+		}
+		strokeArea := 3 * (nx1 - nx0 + 1)
+		if strokeArea > 0 {
+			rAbove := float64(strokeAbove) / float64(strokeArea)
+			rBelow := float64(strokeBelow) / float64(strokeArea)
+			// A real isolated colon dot has empty rows BOTH above (the gap
+			// between dots) and below (the space below the lower dot).  If
+			// either band remains densely white, the partner sample is part
+			// of a continuous stroke (digit segment) — reject the upgrade.
+			if rAbove > 0.50 || rBelow > 0.50 {
+				continue
+			}
+		}
+
+		boxes[i].IsColon = true
+		boxes[i].IsDecimal = false
 	}
 	return boxes
+}
+
+// splitWideMergedDigits looks for CCs whose width substantially exceeds the
+// median digit width (bezel noise sometimes bridges adjacent digits into one
+// CC), and splits them along column-projection valleys.
+//
+// Algorithm: for each suspect CC, compute the per-column white-pixel count
+// within its bbox; identify contiguous runs of columns whose count is
+// ≥30% of the CC's per-column maximum AND wider than medW/3 AND whose
+// in-run peak height is ≥80% of the CC's row height.  Output one sub-CC
+// per run, with the CC's full y-range.  Narrow column-peaks and peaks that
+// don't reach near-full height are discarded — they tend to be bezel
+// artefacts bleeding into the CC, not real digits.
+func splitWideMergedDigits(comps []classifiedComp, rowBinary gocv.Mat, rowOffset int) []classifiedComp {
+	rowH := rowBinary.Rows()
+	var widths []int
+	for _, c := range comps {
+		if c.rect.Dy() > rowH/2 {
+			widths = append(widths, c.rect.Dx())
+		}
+	}
+	if len(widths) == 0 {
+		return comps
+	}
+	sort.Ints(widths)
+	medW := widths[len(widths)/2]
+	if medW <= 0 {
+		return comps
+	}
+
+	out := make([]classifiedComp, 0, len(comps))
+	for _, c := range comps {
+		w := c.rect.Dx()
+		h := c.rect.Dy()
+		if w <= medW*3/2 || h <= rowH/2 {
+			out = append(out, c)
+			continue
+		}
+		subs := splitCCByProjection(c, rowBinary, rowOffset, medW)
+		if len(subs) >= 2 {
+			out = append(out, subs...)
+		} else {
+			// Couldn't find a confident split; keep original.
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+func splitCCByProjection(c classifiedComp, rowBinary gocv.Mat, rowOffset, medW int) []classifiedComp {
+	yLo := c.rect.Min.Y - rowOffset
+	yHi := c.rect.Max.Y - rowOffset
+	if yLo < 0 {
+		yLo = 0
+	}
+	if yHi > rowBinary.Rows() {
+		yHi = rowBinary.Rows()
+	}
+	if yHi <= yLo {
+		return nil
+	}
+	width := c.rect.Dx()
+	cols := make([]int, width)
+	maxCol := 0
+	for cx := 0; cx < width; cx++ {
+		count := 0
+		for ry := yLo; ry < yHi; ry++ {
+			if rowBinary.GetUCharAt(ry, c.rect.Min.X+cx) > 0 {
+				count++
+			}
+		}
+		cols[cx] = count
+		if count > maxCol {
+			maxCol = count
+		}
+	}
+	if maxCol == 0 {
+		return nil
+	}
+	threshold := maxCol * 30 / 100
+	minRun := medW / 3
+	if minRun < 5 {
+		minRun = 5
+	}
+	rowHeight := yHi - yLo
+	// Real digit strokes span close to the full row height; bezel-noise
+	// peaks within the wide CC top out well below it.
+	heightFloor := rowHeight * 80 / 100
+
+	// Find contiguous "active" runs (count >= threshold) wider than minRun
+	// whose in-run peak count reaches heightFloor.
+	var subs []classifiedComp
+	runStart := -1
+	runPeak := 0
+	for cx := 0; cx <= width; cx++ {
+		active := cx < width && cols[cx] >= threshold
+		if active {
+			if runStart < 0 {
+				runStart = cx
+				runPeak = 0
+			}
+			if cols[cx] > runPeak {
+				runPeak = cols[cx]
+			}
+			continue
+		}
+		if runStart >= 0 {
+			runEnd := cx // exclusive
+			if runEnd-runStart >= minRun && runPeak >= heightFloor {
+				// Tight bbox around the active run so the bbox aspect
+				// reflects the stroke shape, not the wide CC.  A typical
+				// '1' stroke split out this way then has aspect h/w
+				// above OneRatio and AspectClassify handles it directly.
+				pad := 1
+				x0 := runStart - pad
+				if x0 < 0 {
+					x0 = 0
+				}
+				x1 := runEnd + pad
+				if x1 > width {
+					x1 = width
+				}
+				area := 0
+				for px := x0; px < x1; px++ {
+					area += cols[px]
+				}
+				subs = append(subs, classifiedComp{
+					rect: image.Rect(
+						c.rect.Min.X+x0, c.rect.Min.Y,
+						c.rect.Min.X+x1, c.rect.Max.Y,
+					),
+					area: area,
+				})
+			}
+			runStart = -1
+			runPeak = 0
+		}
+	}
+	return subs
 }
 
 func abs_int(x int) int {

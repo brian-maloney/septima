@@ -9,7 +9,22 @@ import (
 )
 
 // RectifyPerspective attempts to correct perspective distortion in the ROI.
+// Returns a clone of the region when no quadrilateral is detected.
 func RectifyPerspective(src gocv.Mat, roi image.Rectangle) gocv.Mat {
+	out, _ := RectifyPerspectiveDetailed(src, roi)
+	return out
+}
+
+// RectifyPerspectiveDetailed runs the rectification and also reports the
+// maximum tilt of any detected quad edge from its nominal axis, in degrees.
+// `applied` is true only when a quadrilateral was found and warping actually
+// ran; callers can use the tilt magnitude to gate whether to use the warped
+// output (small tilts are usually within the noise of Hough line fitting and
+// the warped output then differs from the input only by a sub-pixel shift).
+//
+// When `applied` is false, the returned Mat is a plain clone of the region
+// and the tilt is zero.
+func RectifyPerspectiveDetailed(src gocv.Mat, roi image.Rectangle) (gocv.Mat, RectifyInfo) {
 	region := src.Region(roi)
 	defer region.Close()
 
@@ -31,9 +46,60 @@ func RectifyPerspective(src gocv.Mat, roi image.Rectangle) gocv.Mat {
 
 	quad := detectQuad(lines, region.Cols(), region.Rows())
 	if quad == nil {
-		return region.Clone()
+		return region.Clone(), RectifyInfo{}
 	}
-	return warpToRect(region, quad)
+	info := RectifyInfo{Applied: true, MaxTiltDeg: quadMaxTiltDeg(quad)}
+	return warpToRect(region, quad), info
+}
+
+// RectifyInfo reports how RectifyPerspective interpreted the ROI.
+type RectifyInfo struct {
+	// Applied is true when a quadrilateral was detected and warping ran.
+	Applied bool
+	// MaxTiltDeg is the largest absolute angular deviation of any quad edge
+	// from its nominal axis (top/bottom from horizontal, left/right from
+	// vertical), in degrees. Zero when no quad was detected.
+	MaxTiltDeg float64
+}
+
+// quadMaxTiltDeg returns the maximum absolute tilt (in degrees) of the quad's
+// four edges from their nominal axes. Top/bottom edges are compared against
+// horizontal, left/right against vertical. Always returns an acute angle in
+// [0, 90].
+func quadMaxTiltDeg(quad []point2f) float64 {
+	if len(quad) != 4 {
+		return 0
+	}
+	tl, tr, br, bl := quad[0], quad[1], quad[2], quad[3]
+	hTop := edgeTiltFromHorizontal(tl, tr)
+	hBot := edgeTiltFromHorizontal(bl, br)
+	vLeft := edgeTiltFromVertical(tl, bl)
+	vRight := edgeTiltFromVertical(tr, br)
+	max := hTop
+	for _, t := range []float64{hBot, vLeft, vRight} {
+		if t > max {
+			max = t
+		}
+	}
+	return max
+}
+
+// edgeTiltFromHorizontal returns the acute angle (degrees) between the line
+// a→b and the horizontal axis.
+func edgeTiltFromHorizontal(a, b point2f) float64 {
+	dx := b.x - a.x
+	dy := b.y - a.y
+	rad := math.Atan2(math.Abs(dy), math.Abs(dx))
+	return rad * 180 / math.Pi
+}
+
+// edgeTiltFromVertical returns the acute angle (degrees) between the line
+// a→b and the vertical axis.
+func edgeTiltFromVertical(a, b point2f) float64 {
+	dx := b.x - a.x
+	dy := b.y - a.y
+	rad := math.Atan2(math.Abs(dx), math.Abs(dy))
+	return rad * 180 / math.Pi
 }
 
 type point2f struct{ x, y float64 }
