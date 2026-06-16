@@ -65,7 +65,15 @@ func ReadMat(m gocv.Mat, userOpts ...Option) (*Result, error) {
 	}
 
 	// ── Stage 1: obtain the working image (ROI crop or full frame) ──────────
+	// refined records whether RefineDisplayROI swapped in a sub-rectangle.
+	// When true, the working image is the LCD-interior crop and we can both
+	//   (a) assume dark-on-light polarity (embedded LCDs almost always are),
+	//       useful because polarity detection on a tightly-cropped LCD is
+	//       sensitive to histogram shape and may flip the wrong way, and
+	//   (b) skip the CC-based zeroBorder flood, which would chase digit-to-
+	//       edge bridges and destroy digits along with the bezel artefact.
 	var working gocv.Mat
+	refined := false
 	if opts.ROI != nil {
 		region := m.Region(*opts.ROI)
 		working = region.Clone()
@@ -74,8 +82,48 @@ func ReadMat(m gocv.Mat, userOpts ...Option) (*Result, error) {
 		roi := detect.FindDisplayROI(m)
 		roi = detect.PadROI(roi, 5, m.Cols(), m.Rows())
 		region := m.Region(roi)
-		working = region.Clone()
+		outer := region.Clone()
 		region.Close()
+
+		// Optional refinement: look for a tighter LCD sub-rectangle inside
+		// the device-level ROI (e.g., RSA SecurID's LCD strip embedded in a
+		// plastic body).  Only swap if a clear LCD sub-region is found that is
+		// meaningfully smaller than the parent.  Shrink the bbox inward to
+		// exclude the LCD bezel.
+		if sub := detect.RefineDisplayROI(outer); !sub.Empty() {
+			subArea := sub.Dx() * sub.Dy()
+			outerArea := outer.Cols() * outer.Rows()
+			if outerArea > 0 && subArea*100/outerArea <= 55 {
+				shrinkY := sub.Dy() / 6
+				if shrinkY < 4 {
+					shrinkY = 4
+				}
+				shrinkX := sub.Dx() / 12
+				if shrinkX < 4 {
+					shrinkX = 4
+				}
+				inside := image.Rect(
+					sub.Min.X+shrinkX, sub.Min.Y+shrinkY,
+					sub.Max.X-shrinkX, sub.Max.Y-shrinkY,
+				)
+				if inside.Dx() > 40 && inside.Dy() > 20 {
+					subRegion := outer.Region(inside)
+					working = subRegion.Clone()
+					subRegion.Close()
+					outer.Close()
+					refined = true
+				} else {
+					working = outer
+				}
+			} else {
+				working = outer
+			}
+		} else {
+			working = outer
+		}
+		if refined && opts.Polarity == PolarityAuto {
+			opts.Polarity = PolarityDarkOnLight
+		}
 	}
 	defer working.Close()
 	save("01_roi", working)
@@ -144,7 +192,17 @@ func ReadMat(m gocv.Mat, userOpts ...Option) (*Result, error) {
 	}
 	defer binaryInv.Close()
 
-	binary := zeroBorder(binaryInv)
+	// For refined ROIs we've already cropped tightly inside the LCD bezel, so
+	// the CC-based flood-fill that bezel removal needs would be too aggressive
+	// (small bezel-edge artefacts touching the border are often connected to
+	// real digits via thin pixel bridges, and flooding the artefact destroys
+	// the digit).  Use the hard-margin-only variant in that case.
+	var binary gocv.Mat
+	if refined {
+		binary = zeroBorderHard(binaryInv)
+	} else {
+		binary = zeroBorder(binaryInv)
+	}
 	defer binary.Close()
 	save("04_binary", binary)
 
@@ -554,6 +612,32 @@ func findDigitRowYRange(rowMask gocv.Mat, rowOffset int) (int, int) {
 		return rowOffset, rowOffset + h
 	}
 	return rowOffset + bestStart, rowOffset + bestStart + bestLen
+}
+
+// zeroBorderHard zeros a hard margin around the image without doing any
+// CC-based flood-fill.  Used for refined LCD ROIs where the caller has
+// already cropped tightly inside the bezel: a flood-fill there would chase
+// digit-to-edge bridges and destroy the digits along with the bezel artefact.
+func zeroBorderHard(src gocv.Mat) gocv.Mat {
+	dst := src.Clone()
+	margin := src.Rows() / 30
+	if margin < 3 {
+		margin = 3
+	}
+	rows, cols := dst.Rows(), dst.Cols()
+	for r := 0; r < margin; r++ {
+		for c := 0; c < cols; c++ {
+			dst.SetUCharAt(r, c, 0)
+			dst.SetUCharAt(rows-1-r, c, 0)
+		}
+	}
+	for c := 0; c < margin; c++ {
+		for r := 0; r < rows; r++ {
+			dst.SetUCharAt(r, c, 0)
+			dst.SetUCharAt(r, cols-1-c, 0)
+		}
+	}
+	return dst
 }
 
 // zeroBorder removes white regions that touch the image border — these are
