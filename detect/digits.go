@@ -75,6 +75,15 @@ func SegmentDigits(rowBinary gocv.Mat, rowOffset int, opts DigitOptions) []Digit
 		if area < opts.MinArea || w < opts.MinWidth || h < opts.MinHeight {
 			continue
 		}
+		// Drop low, wide horizontal "bar" CCs: bezel-edge specks that
+		// land just inside the inner margin and have aspect 2x or more
+		// at a height well below any digit or decimal dot.  They survive
+		// the area filter (a 27×4 sliver still has area=84) yet provoke
+		// false "wide-CC" splits and interleave between digit halves
+		// during X-overlap merging.
+		if h*12 < rowBinary.Rows() && w >= h*2 {
+			continue
+		}
 		comps = append(comps, classifiedComp{
 			rect: image.Rect(x, y+rowOffset, x+w, y+rowOffset+h),
 			area: area,
@@ -572,10 +581,21 @@ func splitCCByProjection(c classifiedComp, rowBinary gocv.Mat, rowOffset, medW i
 				for px := x0; px < x1; px++ {
 					area += cols[px]
 				}
+				// Tight y-range over the sub-rect's columns: parent's
+				// y bounds may span the full LCD height (e.g., when the
+				// "wide CC" is actually a bezel-outline ring touching all
+				// edges), so inheriting Min.Y/Max.Y inflates this sub-rect
+				// and pollutes downstream height statistics.
+				subY0, subY1 := tightYRange(rowBinary,
+					c.rect.Min.X+x0, c.rect.Min.X+x1, yLo, yHi)
+				if subY1 <= subY0 {
+					subY0 = c.rect.Min.Y - rowOffset
+					subY1 = c.rect.Max.Y - rowOffset
+				}
 				subs = append(subs, classifiedComp{
 					rect: image.Rect(
-						c.rect.Min.X+x0, c.rect.Min.Y,
-						c.rect.Min.X+x1, c.rect.Max.Y,
+						c.rect.Min.X+x0, subY0+rowOffset,
+						c.rect.Min.X+x1, subY1+rowOffset,
 					),
 					area: area,
 				})
@@ -585,6 +605,58 @@ func splitCCByProjection(c classifiedComp, rowBinary gocv.Mat, rowOffset, medW i
 		}
 	}
 	return subs
+}
+
+// tightYRange finds the longest contiguous y-run in [yLo, yHi) within
+// columns [x0, x1) where every row carries a substantial amount of
+// content.  "Substantial" means at least ~15% of the column window — that
+// excludes thin one- or two-pixel perimeter strokes while preserving real
+// digit strokes.  Returns the longest run so that a bezel-outline ring's
+// top/bottom strokes (separated from the digit body by an empty band) do
+// not get included in the y-range; only the contiguous digit body wins.
+// Returns (yLo, yLo) when no run is found.
+func tightYRange(bin gocv.Mat, x0, x1, yLo, yHi int) (int, int) {
+	cols := bin.Cols()
+	if x0 < 0 {
+		x0 = 0
+	}
+	if x1 > cols {
+		x1 = cols
+	}
+	if x1 <= x0 {
+		return yLo, yLo
+	}
+	minCount := (x1 - x0) * 15 / 100
+	if minCount < 2 {
+		minCount = 2
+	}
+	bestStart, bestEnd := -1, -1
+	curStart := -1
+	for r := yLo; r < yHi; r++ {
+		count := 0
+		for c := x0; c < x1; c++ {
+			if bin.GetUCharAt(r, c) > 0 {
+				count++
+				if count >= minCount {
+					break
+				}
+			}
+		}
+		if count >= minCount {
+			if curStart < 0 {
+				curStart = r
+			}
+			if bestStart < 0 || r-curStart+1 > bestEnd-bestStart+1 {
+				bestStart, bestEnd = curStart, r
+			}
+		} else {
+			curStart = -1
+		}
+	}
+	if bestStart < 0 {
+		return yLo, yLo
+	}
+	return bestStart, bestEnd + 1
 }
 
 func abs_int(x int) int {

@@ -553,6 +553,94 @@ func ReadMat(m gocv.Mat, userOpts ...Option) (*Result, error) {
 			}
 		}
 
+		// Trailing-digit reconstruction: when a single colon (paired
+		// fragments) or multiple decimal fragments cluster past the
+		// rightmost real digit at roughly a digit's spacing, the
+		// underlying digit's strokes are likely fused with the bezel-ring
+		// outline (so its tall verticals never produced standalone CCs).
+		// Treat the fragment cluster's x-range plus the row's full
+		// y-extent as one virtual digit bbox for segment sampling.
+		// Skip displays that legitimately render colons (clock-style)
+		// so a real colon isn't reinterpreted as a digit.
+		if !opts.HasColon {
+			rmRight := -1
+			for _, db := range digitBoxes {
+				if db.IsDecimal || db.IsColon {
+					continue
+				}
+				if db.Bounds.Max.X > rmRight {
+					rmRight = db.Bounds.Max.X
+				}
+			}
+			var digW []int
+			for _, db := range digitBoxes {
+				if !db.IsDecimal && !db.IsColon {
+					digW = append(digW, db.Bounds.Dx())
+				}
+			}
+			medW := 0
+			if len(digW) > 0 {
+				sort.Ints(digW)
+				medW = digW[len(digW)/2]
+			}
+			if rmRight >= 0 && medW > 0 {
+				var trailingIdx []int
+				minX, maxX := 1<<30, -1
+				for i, db := range digitBoxes {
+					if !(db.IsDecimal || db.IsColon) {
+						continue
+					}
+					if db.Bounds.Min.X <= rmRight {
+						continue
+					}
+					trailingIdx = append(trailingIdx, i)
+					if db.Bounds.Min.X < minX {
+						minX = db.Bounds.Min.X
+					}
+					if db.Bounds.Max.X > maxX {
+						maxX = db.Bounds.Max.X
+					}
+				}
+				// Trigger when a contiguous trailing cluster spans at least
+				// half a digit width — either one wide colon-merge bbox or
+				// several decimal fragments adding up to digit-sized.
+				if len(trailingIdx) >= 1 && maxX-minX >= medW/2 {
+					// Refine the x-range by scanning the row mask in
+					// [rmRight + 2, end] for the contiguous run of
+					// columns that has at least 8% of digit-height white
+					// content.  Trims away the bezel's narrow right-edge
+					// stroke (which would otherwise widen the bbox so
+					// the c-segment sampling window catches it).
+					vMinX, vMaxX := refineTrailingX(cleaned, rmRight+2,
+						minX, maxX, medW)
+					if vMaxX-vMinX < medW {
+						mid := (vMinX + vMaxX) / 2
+						vMinX = mid - medW/2
+						vMaxX = mid + medW/2
+					}
+					if vMinX < rmRight+2 {
+						vMinX = rmRight + 2
+					}
+					if vMaxX > cleaned.Cols() {
+						vMaxX = cleaned.Cols()
+					}
+					vbox := image.Rect(vMinX, rr.Bounds.Min.Y, vMaxX, rr.Bounds.Max.Y)
+					skip := map[int]bool{}
+					for _, i := range trailingIdx {
+						skip[i] = true
+					}
+					var kept []detect.DigitBox
+					for i, db := range digitBoxes {
+						if !skip[i] {
+							kept = append(kept, db)
+						}
+					}
+					kept = append(kept, detect.DigitBox{Bounds: vbox})
+					digitBoxes = kept
+				}
+			}
+		}
+
 		// Profile-driven filter: when a profile says the display has no
 		// decimal points, drop any isolated decimals (typically AM/PM indicator
 		// dots, alarm-bell icons, or stray reflection specks).  Same idea for
@@ -717,6 +805,60 @@ func abs(x int) int {
 		return -x
 	}
 	return x
+}
+
+// refineTrailingX finds the bounding x-range of substantial content in
+// the binary `bin` between xStart and the right edge, hinted at by the
+// initial fragment cluster [fragMinX, fragMaxX].  Returns (vMinX, vMaxX)
+// where vMinX is the leftmost column whose per-column white count is
+// ≥ ~8% of cleaned image height (a digit-stroke height proxy), and
+// vMaxX is one past the rightmost such column — but capped so the run
+// extends at most one digit width from vMinX, which avoids dragging the
+// bezel right-edge stroke into the bbox.
+func refineTrailingX(bin gocv.Mat, xStart, fragMinX, fragMaxX, medW int) (int, int) {
+	cols := bin.Cols()
+	rows := bin.Rows()
+	if xStart < 0 {
+		xStart = 0
+	}
+	if xStart >= cols {
+		return fragMinX, fragMaxX
+	}
+	thr := rows / 12
+	if thr < 4 {
+		thr = 4
+	}
+	colCounts := make([]int, cols-xStart)
+	for cx := xStart; cx < cols; cx++ {
+		count := 0
+		for r := 0; r < rows; r++ {
+			if bin.GetUCharAt(r, cx) > 0 {
+				count++
+			}
+		}
+		colCounts[cx-xStart] = count
+	}
+	first, last := -1, -1
+	for i, c := range colCounts {
+		if c >= thr {
+			if first < 0 {
+				first = xStart + i
+			}
+			last = xStart + i
+		}
+	}
+	if first < 0 {
+		return fragMinX, fragMaxX
+	}
+	vMinX := first
+	vMaxX := last + 1
+	// Cap at one digit width beyond the leftmost active column so the
+	// bezel's right edge (which extends well past the digit) doesn't
+	// inflate the bbox.
+	if medW > 0 && vMaxX-vMinX > medW {
+		vMaxX = vMinX + medW
+	}
+	return vMinX, vMaxX
 }
 
 // findDigitRowYRange identifies the y-range within rowMask (a row-band binary

@@ -34,7 +34,7 @@ septima/
 │   └── digits.go              # SegmentDigits — CC + vertical merge + colon detection
 ├── decode/                    # Segment mask → character
 │   ├── lookup.go              # segList (ordered, deterministic), nearestMatch, exactMatch
-│   ├── segments.go            # SampleSegments — 7 zone windows on 30×50 canvas, density threshold 0.40
+│   ├── segments.go            # SampleSegments — 7 zone windows on 30×50 canvas, density threshold 0.45
 │   ├── charset.go             # CharsetFull/Digits/Decimal/Hex/TTRobot, Decode()
 │   └── special.go             # AspectClassify (1/- by h/w), AsciiArtSegments
 ├── dnn/                       # ONNX fallback stub (no trained model yet)
@@ -94,7 +94,7 @@ full image
         ├── IsDecimal → '.' (skip if charset=digits)
         ├── IsColon   → ':' (skip if charset≠full)
         ├── AspectClassify: h/w > oneRatio(4.0) → '1'
-        └── NormalizeDigitImage → SampleSegments(30×50, 7 zones, threshold 0.40)
+        └── NormalizeDigitImage → SampleSegments(30×50, 7 zones, threshold 0.45)
             → exactMatch → nearestMatch (deterministic ordered segList)
             → Decode(charset)
             → DNN fallback if confidence < 0.60 (no model yet)
@@ -138,7 +138,7 @@ full image
 
 ---
 
-## Current test status (as of 2026-06-16, seventh session)
+## Current test status (as of 2026-06-17, eighth session)
 
 | Image | Display | Expected | Auto | Hinted |
 |---|---|---|---|---|
@@ -148,23 +148,12 @@ full image
 | spr-dreamsky….jpeg | alarm_clock | 2:47 | ✅ 2:47 | ✅ 2:47 |
 | 0502.jpg | tank_gauge | 1077 | ✅ 1077 | ✅ 1077 |
 | dVv50.jpg | security_token | 156311 | ✅ 156311 | ✅ 156311 |
-| getting-weird….webp | gas_pump | 86.47\n14.659 | ❌ 8b1\n011054 | ❌ 8.6.1.\n011054 |
-| 68f79706….jpeg | calculator | 123456789012 | ❌ 122456888981:1 | ❌ 1224568981 |
+| **68f79706….jpeg** | **calculator** | **123456789012** | **✅ 123456789012** | **✅ 123456789012** |
+| getting-weird….webp | gas_pump | 86.47\n14.659 | ❌ 051\n711057 | ❌ 0.5.1.\n711057 |
 
-**Auto: 6/8 — Hinted: 6/8** (security token auto now passes as well; the
-sixth-session note that the auto path still produced `15631:1` was stale).
-
-Calculator decode improved substantially with perspective-rectification
-wiring (see "Fixes that landed in the seventh session" below).  All 12
-digits now survive into the cleaned binary, but the digit segmenter only
-emits 10 boxes (hinted) / 14 (auto), with `3` misread as `2`, `7` lost
-into the adjacent `8` CC, `0` misread as `8`, and the trailing `12` pair
-merged into one box.  These are segmentation/decode issues, not ROI
-issues.
-
-Gas pump 1 unchanged from sixth session: tilt is 4.6° so the new
-perspective gate (15°) doesn't trigger; the glare/italic decode problem
-remains.
+**Auto: 7/8 — Hinted: 7/8**.  Calculator now passes cleanly in both modes.
+Gas pump 1 remains the sole failure (glare + italic font + edge-clipped "7"
+— structural defects independent of the calculator work).
 
 ### Fixes that landed in the second session
 
@@ -225,6 +214,68 @@ remains.
   because those '1's sit at normal digit spacing from their neighbours
   (gap test fails).
 
+### Fixes that landed in the eighth session (calculator passing)
+
+Five interlocking changes brought the calculator from `1224568981` to a
+clean `123456789012`:
+
+1. **`tightYRange` in `detect/digits.go`** — new helper used by
+   `splitCCByProjection` to set each sub-rect's y-bounds.  Returns the
+   longest contiguous y-run (not first-to-last) where every row has at
+   least 15 % of the column-window filled.  Reason: the bezel-outline
+   ring CC has a top stroke and a bottom stroke separated by the LCD's
+   empty interior; the previous "min/max active row" semantics returned
+   the full row height for every sub-rect derived from the ring,
+   inflating digit bboxes when they later merged with the sub-rects.
+   With the longest-run rule, sub-rects get the digit-content y-range
+   instead.  Without this, the `8` CC bbox was being inflated to h=132
+   (vs real h=119), pulling its f-segment density below threshold so it
+   decoded as `2`.
+2. **Horizontal-bar noise filter in `SegmentDigits`** — drop CCs where
+   `h*12 < rowH` AND `w >= 2h` before they enter `splitWideMergedDigits`
+   or `mergeXOverlapping`.  Reason: bezel-speck rows of h=3-7 px were
+   sitting between the `7` top half and bottom stub in sorted-by-X
+   order; `mergeXOverlapping`'s consecutive-pair-only logic then refused
+   to merge the halves through the noise, and the post-merge
+   reclassification pass dropped both halves into the decimal bucket.
+3. **`segOnThreshold` raised from 0.40 to 0.45** in `decode/segments.go`.
+   The stylized "7" left-tail on this calculator font occupies the
+   f-segment zone with density ~0.52 — just above 0.40 → reads as `9`.
+   At 0.45 the borderline f/d/g densities flip off and the `7` decodes
+   correctly.  Side effect: the "0"'s middle-segment false positive
+   (g=0.466 from vertical strokes ghosting through the wide g window)
+   also drops below threshold.
+4. **g-segment window narrowed** from `{4, 21, 22, 8}` to
+   `{10, 21, 10, 8}` in `decode/segments.go`.  The original window
+   reached x=4-26 across the canvas, overlapping the f (x=1-9) and b
+   (x=21-29) vertical zones at the inner edges.  A digit like `0` (two
+   strong verticals through the middle band) lit g via these
+   intersections.  The narrower window samples only the central 33 %
+   of the digit width — empty for digits lacking g, fully covered when
+   g is present.
+5. **Trailing-digit reconstruction in `septima.go`** — added just before
+   the profile-driven decimal/colon filter.  When ≥1 decimals or a
+   `detectColons`-merged colon cluster sits past the rightmost real
+   digit at digit-spacing, builds a virtual digit bbox over the row's
+   full y-extent.  `refineTrailingX` scans the cleaned binary in the
+   trailing region for columns with ≥1/12 of image height white, finds
+   the first/last such column, and caps the bbox width at one digit
+   width so the bezel's right-edge stroke doesn't bleed into the
+   c-segment sampling window.  Gated on `!opts.HasColon` so clock-style
+   displays aren't affected.  Recovers the trailing `2` whose
+   right-vertical fused into the bezel ring CC.
+
+Notes on what was tried and discarded along the way:
+- Lowering the splitWideMergedDigits heightFloor (to ~55-60 %) to capture
+  the trailing-`2` right vertical *did* expose it, but also produced
+  spurious sub-rects at every digit column where one stroke had borderline
+  height.  Reverted; the post-segmentation virtual-digit construction is
+  much more surgical.
+- Dropping the ring CC entirely by area/bbox-area density (<15 %) worked
+  for the body of the row but *also* dropped the digit strokes fused to
+  the ring (trailing `2` right vertical disappeared).  Reverted — keep
+  the ring CC and rely on tightYRange + virtual-digit reconstruction.
+
 ### Fixes that landed in the seventh session (calculator rectification)
 
 - **`detect.RectifyPerspectiveDetailed(src, roi)` in `detect/perspective.go`**
@@ -273,7 +324,8 @@ remains.
 - Fourth session: `detect/digits.go` (`shouldMerge` stacked-pair area gate), `AGENTS.md`.
 - Fifth session: `detect/display.go` (`RefineDisplayROI`), `septima.go` (refinement plumbing, `zeroBorderHard`, polarity hint), `AGENTS.md`.
 - Sixth session: `detect/digits.go` (`splitWideMergedDigits`, `splitCCByProjection`), `septima.go` (edge-bargraph filter), `AGENTS.md`.
-- Seventh session: `detect/perspective.go` (`RectifyPerspectiveDetailed`, `RectifyInfo`, fixed tilt math), `septima.go` (rectification fallback, `cropToDarkBand`), `AGENTS.md` (this update).
+- Seventh session: `detect/perspective.go` (`RectifyPerspectiveDetailed`, `RectifyInfo`, fixed tilt math), `septima.go` (rectification fallback, `cropToDarkBand`), `AGENTS.md`.
+- Eighth session: `detect/digits.go` (`tightYRange`, horizontal-bar noise filter, sub-rect tight-y in `splitCCByProjection`), `decode/segments.go` (raised `segOnThreshold` to 0.45, narrowed g window), `septima.go` (trailing-digit reconstruction + `refineTrailingX`), `AGENTS.md` (this update).
 
 No unit-test regressions: all 42 pure-Go tests still pass.  No integration-test regressions: every previously-passing image still passes.  Security token: from `-..A..8F-`/`08` (auto/hinted) → `115631:`/`115631` — right multiset, wrong order.
 
@@ -308,7 +360,7 @@ PKG_CONFIG_PATH=$(brew --prefix opencv)/lib/pkgconfig go test ./decode/ ./profil
 - **Both auto and hinted now pass "1077"** as of the fourth session.
 
 ### Gas pump 1 (getting-weird….webp)
-- LCD ROI refinement (fifth session) now isolates the two-row display cleanly, but glare/italics still destroy the per-digit binary so decode is wrong.  Output went from `:8-` / `.8-\n2` (single-row garbage) → `..8.b.1\n011054` / `8.6.1.\n011054` (two rows of nearer-but-still-wrong digits).
+- LCD ROI refinement (fifth session) now isolates the two-row display cleanly, but glare/italics still destroy the per-digit binary so decode is wrong.  Eighth-session output (after the segment-threshold raise and g-window narrowing): auto `051\n711057`, hinted `0.5.1.\n711057`.  Same structural defects (clipped "7", glare-corrupted middle digits, phantom left blob in row 1) — the slight character shift relative to the seventh session is just the threshold change affecting borderline segments.
 - **Next step**: try applying CLAHE with much stronger parameters, or apply shear to correct the italic font before thresholding.  Per-digit confidence + DNN fallback would also help.
 
 ### Gas pump 2 auto (jai5qyznvjky.jpg)
@@ -343,29 +395,10 @@ PKG_CONFIG_PATH=$(brew --prefix opencv)/lib/pkgconfig go test ./decode/ ./profil
   bottom-anchored decimals intact.
 
 ### Calculator (68f79706….jpeg)
-- 12 digits, perspective tilt (18.13°), hand in frame, glare.
-- Seventh session: perspective rectification + `cropToDarkBand` wired in
-  as a fallback when refinement fails.  Output went from `4-` to
-  `1224568981` (hinted) / `122456888981:1` (auto).  All 12 digits now
-  visible in the cleaned binary.
-- **Remaining defects (downstream of the binary pipeline):**
-  - `3` segment-misread as `2` — likely the top-right segment doesn't
-    register cleanly; check `SampleSegments` zone sampling on this digit
-    image (`digit_r0_x173.png` when running with `-D`).
-  - `7` lost: the `7` and adjacent `8` are a single CC at the bbox level,
-    so `splitWideMergedDigits` never sees a wide-enough parent to
-    consider splitting.  The bezel-noise bridge connecting them survives
-    `morphClean`.
-  - `0` segment-misread as `8` — probably the middle segment ghosting from
-    bezel noise.
-  - Trailing `12` pair merged into one box decoded as `1` (or
-    aspect-classified).  Same root cause as the `7`-`8` merge.
-- **Next step**: the binary CC bridging between `7`-`8` and `1`-`2` at the
-  trailing end likely shows up as thin horizontal artefacts at the
-  digit-baseline.  A vertical-projection-based "valley restorer" run on
-  the cleaned binary before `SegmentDigits` could re-cut them.  Or invest
-  in DNN per-digit classification (`dnn` package scaffolding exists) for
-  the segment-misreads.
+- **Passing both auto and hinted** as of the eighth session.  See "Fixes
+  that landed in the eighth session" above for the five interlocking
+  changes (tightYRange, horizontal-bar noise filter, segOnThreshold
+  raise, g-window narrowing, trailing-digit reconstruction).
 
 ### DNN fallback
 - `dnn/classifier.go` stub is present. Path: `dnn.SetModelPath(path)`, then `dnn.Classify(digitGray)`.

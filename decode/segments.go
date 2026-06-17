@@ -20,6 +20,14 @@ var DebugSegments bool
 // 7 segments on the canonical 30×50 canvas.
 //
 // Bit order: a=0, b=1, c=2, d=3, e=4, f=5, g=6
+//
+// The g (middle horizontal) window is narrower in x than a/d (top/bottom
+// horizontals): the f/b and e/c vertical zones reach into the middle row
+// near their inner edges, and any sample area that overlaps both verticals
+// would otherwise read a '0' (no g, two strong verticals through the band)
+// as an '8' (false-positive g).  The narrower g window samples the central
+// 33% of the digit width, which is empty for digits lacking segment g but
+// fully covered by the horizontal stroke when present.
 var segmentWindows = [7][4]int{
 	{4, 0, 22, 10},  // a: top horizontal    (top 20%)
 	{21, 2, 8, 20},  // b: top-right vertical (top 50%, right 27%)
@@ -27,16 +35,19 @@ var segmentWindows = [7][4]int{
 	{4, 40, 22, 10}, // d: bottom horizontal  (bottom 20%)
 	{1, 28, 8, 20},  // e: bottom-left        (bottom 50%, left 27%)
 	{1, 2, 8, 20},   // f: top-left           (top 50%, left 27%)
-	{4, 21, 22, 8},  // g: middle horizontal  (middle 16%)
+	{10, 21, 10, 8}, // g: middle horizontal  (centre band, narrow x)
 }
 
 var segNames = [7]string{"a", "b", "c", "d", "e", "f", "g"}
 
 // segOnThreshold is the minimum white-pixel density for a zone to be
-// considered "ON".  0.40 means at least 40% of zone pixels must be
+// considered "ON".  0.45 means at least 45% of zone pixels must be
 // foreground.  This suppresses contamination from perpendicular segments
-// crossing the zone boundaries (e.g. vertical bars through the 'g' zone).
-const segOnThreshold = 0.40
+// crossing the zone boundaries (e.g. vertical bars through the 'g' zone)
+// and rejects partial "tail" intrusions (e.g. the stylized top-left flag
+// some seven-segment fonts add to '7' to disambiguate from '1', which
+// would otherwise drag '7' toward '9' through f-zone activation).
+const segOnThreshold = 0.45
 
 // SampleSegments extracts the 7-bit segment mask from a digit image.
 // binaryDigit must be an 8-bit single-channel image where digit pixels are
