@@ -1,177 +1,82 @@
 # septima
 
-Seven-segment display OCR for Go.  Reads a photo or screenshot and returns the
-digits shown on the display as a string.  The CLI is interface-compatible with
-[ssocr](https://www.unix-ag.uni-kl.de/~auerswal/ssocr/) and adds multi-row
-support, automatic display detection, and a DNN fallback classifier.
+Seven-segment display recognition in Go, using a local two-stage YOLO pipeline.
+Inference runs on CPU or GPU via ONNX Runtime; models are trained offline with
+Ultralytics. This is a rewrite of an earlier GoCV/traditional-CV approach (now
+in the git-ignored `old/`), which proved brittle.
 
-## Prerequisites
-
-- Go 1.21+
-- OpenCV 4.x with the [gocv](https://gocv.io/) binding (`gocv.io/x/gocv v0.43`)
-
-Install OpenCV via Homebrew on macOS:
+## Pipeline
 
 ```
-brew install opencv
+image ─▶ stage 1: panel detector (YOLO) ─▶ crop + pad ─▶ stage 2: digit detector (YOLO)
+        ─▶ assemble: cluster rows by y, sort left-to-right, map class→char ─▶ Result
 ```
 
-Then follow the [gocv install guide](https://gocv.io/getting-started/) to set
-the required `CGO_*` environment variables.
+- **Stage 1** finds the display panel so the digits aren't lost when a small
+  panel sits in a large frame (e.g. the tank gauge in a 1920×1080 dark photo).
+- **Stage 2** detects each glyph (`0-9 . : -`) within the cropped panel.
+- **Assembly** groups detections into rows and reads them left-to-right. The tank
+  panel's split 4-digit field (`12 | 15` → `1215`) falls out of x-ordering.
 
-## Build
+## Layout
 
-```
-make          # builds bin/septima and bin/septima-bench
-make install  # installs both to $(GOPATH)/bin
-```
+| Path | Purpose |
+|------|---------|
+| `septima.go`, `result.go`, `options.go` | Public API (`ReadFile`/`Read` → `Result`) |
+| `internal/onnx` | ONNX Runtime session wrapper (binding wired at M3) |
+| `internal/imageproc` | Letterbox, CHW tensor, crop (pure Go, no OpenCV) |
+| `internal/detect` | YOLO decode + NMS, panel/digit model wrappers |
+| `internal/assemble` | Row clustering, left-to-right read, string build |
+| `models/` | `panel.onnx`, `digits.onnx`, `classes.json` |
+| `cmd/septima` | CLI: read one image |
+| `cmd/septima-bench` | Eval against a dir's `ground_truth.json` |
+| `training/` | Python (Ultralytics) data prep, training, ONNX export |
+| `tests/`, `tanktests/` | Fixtures + ground truth (tanktests = primary use case) |
 
-## Usage
+## Building & running (Go)
 
-```
-septima [flags] [pipeline ops...] <image>
-```
-
-### Examples
+Inference uses [`onnxruntime_go`](https://github.com/yalue/onnxruntime_go), which
+loads the ONNX Runtime **shared library at runtime** (cgo build; no link-time
+dependency). The engine auto-discovers the library from the Python `onnxruntime`
+wheel in `training/.venv` (or a copy under `models/`), walking up from the working
+directory. Override explicitly with `SEPTIMA_ORT_LIB=/path/to/libonnxruntime.dylib`.
+CPU works everywhere; CoreML/CUDA optional.
 
 ```sh
-# Auto-detect everything
-septima photo.jpg
+go build ./...
+go test ./internal/...
+# opt-in ORT runtime smoke test (load → run → output shape):
+SEPTIMA_TEST_ONNX=/path/to/any-yolo-640.onnx go test ./internal/onnx -run TestRunModel -v
 
-# Clock display (colon expected)
-septima --profile microwave_clock photo.jpg
-
-# Tank gauge with explicit hint
-septima --profile tank_gauge gauge.jpg
-
-# Manual crop + threshold then read
-septima crop 10 10 200 80 make_mono photo.jpg
-
-# Debug: write per-stage images to /tmp/dbg/
-septima -D /tmp/dbg photo.jpg
+go run ./cmd/septima -models models path/to/image.jpg     # needs models/digits.onnx
+go run ./cmd/septima-bench tanktests                       # exact + per-char accuracy
 ```
 
-### Flags
+## Training (Python, offline)
 
-| Flag | Short | Description |
-|------|-------|-------------|
-| `--threshold N` | `-t` | Luminance threshold percentage |
-| `--iter-threshold` | `-T` | Iterative k-means threshold (default) |
-| `--number-digits N` | `-d` | Expected digits per row (0 = auto) |
-| `--number-rows N` | | Expected rows (0 = auto) |
-| `--charset NAME` | `-c` | `full` (default), `digits`, `decimal`, `hex`, `tt_robot` |
-| `--foreground COLOR` | `-f` | `black` or `white` |
-| `--background COLOR` | `-b` | `black` or `white` |
-| `--print-spaces` | `-s` | Insert spaces between digit groups |
-| `--profile NAME` | | Built-in display profile (see below) |
-| `--no-dnn` | | Disable ONNX fallback classifier |
-| `--debug-image DIR` | `-D` | Write per-stage images to DIR |
-| `--version` | `-V` | Print version and exit |
-
-### Pipeline ops (ssocr-compatible)
-
-```
-crop X Y W H
-rotate DEG | shear OFFSET | mirror {horiz|vert}
-invert | grayscale | make_mono
-dynamic_threshold W H | gray_stretch T1 T2
-rgb_threshold | r_threshold | g_threshold | b_threshold
-dilation [N] | erosion [N] | opening [N] | closing [N]
-remove_isolated | white_border [W]
-set_pixels_filter MASK | keep_pixels_filter MASK
+```sh
+python3 -m venv training/.venv && source training/.venv/bin/activate
+pip install -r training/requirements.txt
+# training/datasets/prepare.py  — merge public 7-seg YOLO datasets
+# training/synth/render.py       — synthetic 7-seg generator (LCD + LED)
+# training/train_digits.py        — Ultralytics YOLO-nano, device=mps
+# training/export_onnx.py         — export to models/*.onnx
 ```
 
-## Built-in profiles
+Data strategy (priority): public 7-seg YOLO datasets → hand-annotated real images
+→ synthetic renders that fill the LCD dark-on-light look and the exact tank framing.
 
-Profiles tune the recognition pipeline for specific display types.  Pass the
-profile name with `--profile`.
+## Status
 
-| Profile | Use case |
-|---------|----------|
-| `generic` | Default — auto-detects everything |
-| `multimeter` | Digital multimeter display |
-| `microwave_clock` | Microwave / oven clock (colon separator) |
-| `alarm_clock` | Bedside alarm clock (colon separator) |
-| `gas_pump` | Fuel pump display (two rows: price and unit) |
-| `tank_gauge` | Liquid tank level gauge |
-| `calculator` | Handheld calculator |
-| `security_token` | RSA / OTP token LCD |
+Milestones tracked in `/Users/vond/.claude/plans/`.
 
-## Go library
-
-```go
-import "github.com/vond/septima"
-
-// Simplest call — returns the text on the display.
-result, err := septima.ReadFile("photo.jpg")
-fmt.Println(result.Text)
-
-// With options.
-result, err = septima.ReadFile("photo.jpg",
-    septima.WithProfile("gas_pump"),
-    septima.WithCharset(septima.CharsetDecimal),
-    septima.WithDebugDir("/tmp/dbg"),
-)
-
-// From a standard Go image.Image.
-result, err = septima.Read(img, septima.WithPolarity(septima.PolarityLightOnDark))
-
-// Multi-row result.
-for _, row := range result.Rows {
-    fmt.Printf("row: %s  conf: %.2f\n", row.Text, row.Confidence)
-}
-```
-
-### Result types
-
-```go
-type Result struct {
-    Rows       []Row      // one per detected row
-    Text       string     // rows joined by "\n"
-    Confidence float64    // minimum per-row confidence
-    Debug      *DebugInfo // non-nil when WithDebugDir is set
-}
-
-type Row struct {
-    Text       string
-    Digits     []Digit
-    Box        image.Rectangle
-    Confidence float64
-}
-
-type Digit struct {
-    Char       rune
-    Segments   byte            // 7-bit segment mask (bit 0 = top segment)
-    Box        image.Rectangle
-    Confidence float64
-    Source     Source          // SourceGeometric or SourceDNN
-}
-```
-
-## Benchmark
-
-Run the test suite against `tests/ground_truth.json`:
-
-```
-make bench
-```
-
-Or directly:
-
-```
-septima-bench tests/
-```
-
-The benchmark prints a pass/fail table for each image in auto mode and in
-hinted mode (using the display type from ground truth), then exits non-zero if
-any image fails.
-
-## Tests
-
-```
-make test       # pure-Go unit tests (no OpenCV required)
-go test ./...   # same
-```
-
-Integration tests in `tests/septima_test.go` require a built binary and OpenCV
-at runtime.
+- **M0 scaffold — done.** Pure-Go logic (letterbox, NMS, row assembly) implemented
+  and unit-tested.
+- **M1 data — done.** 6,325 digit + 1,501 panel training images (public + synthetic).
+- **M2 train — done.** `digits.onnx` trained (YOLO11n, val mAP50 0.991), then
+  fine-tuned on real tank crops via `cmd/septima-annotate`.
+- **M3 Go inference — done.** `onnxruntime_go` two-stage pipeline.
+- **M4 tank — done. 32/32 (100%) exact, 100% char** on `tanktests/` via classical
+  bright-panel crop + fine-tuned digit model. (ML `panel.onnx` deferred to M5.)
+- **M5 generalize to `tests/`** — next: clocks/calculator/pumps need an ML panel
+  detector and end-to-end decimals/colons.

@@ -1,123 +1,66 @@
 package septima
 
-import (
-	"image"
-
-	"github.com/brian-maloney/septima/preprocess"
-)
-
-// Charset controls which characters are considered during lookup.
-type Charset int
-
-const (
-	CharsetFull    Charset = iota // 0-9, -.:', and hex a-f
-	CharsetDigits                 // 0-9 only
-	CharsetDecimal                // 0-9, '.', '-'
-	CharsetHex                    // 0-9, a-f, '.', '-'
-	CharsetTTRobot                // 0-9, '-', a b c d h l n p r t v
-)
-
-// Polarity describes whether the digits are darker or lighter than the background.
-type Polarity int
-
-const (
-	PolarityAuto       Polarity = iota
-	PolarityDarkOnLight         // standard: dark segments on light LCD
-	PolarityLightOnDark         // LED/VFD: bright segments on dark background
-)
-
-// Options holds all tunable parameters.  The zero value means "auto-detect everything."
+// Options holds tunable parameters for a recognition call.
+// The zero value is filled in by defaultOptions().
 type Options struct {
-	Charset        Charset
-	Polarity       Polarity
-	ExpectedDigits int // 0 = auto
-	ExpectedRows   int // 0 = auto
-	ROI            *image.Rectangle
-	Pipeline       []preprocess.Op
-	Profile        string
-	EnableDNN      bool
-	DNNThreshold   float64 // confidence below which DNN is tried (default 0.6)
-	OneRatio       float64 // height/width below which a box is called "1"
-	MinusRatio     float64 // width/height below which a box is called "-"
-	DecHRatio      float64
-	DecWRatio      float64
-	DebugDir       string
-	PrintSpaces    bool
-	SpaceFactor    float64
-	// HasDecimal indicates the profile expects '.' characters in the output.
-	// When false, unpaired decimal-classified components are treated as noise
-	// and dropped after colon detection.
-	HasDecimal bool
-	// HasColon indicates the profile expects ':' characters in the output.
-	// When false, colon-paired components are split back into two separate
-	// digit candidates (and usually filtered as noise).
-	HasColon bool
-	// decimalExpectationSet tracks whether HasDecimal/HasColon were set
-	// (so absent profile keeps the legacy "everything is possible" behaviour).
-	decimalExpectationSet bool
+	// ModelDir is the directory holding panel.onnx, digits.onnx and classes.json.
+	// Empty means use the default ("models" relative to the working directory,
+	// overridable via the SEPTIMA_MODEL_DIR environment variable).
+	ModelDir string
+
+	// Profile is an optional display-type hint (e.g. "tank_gauge", "gas_pump").
+	// It biases panel/charset selection but is not required.
+	Profile string
+
+	// ExpectedRows tells the engine how many digit rows to expect (0 = auto).
+	ExpectedRows int
+	// ExpectedDigits tells the engine how many digits per row to expect (0 = auto).
+	ExpectedDigits int
+
+	// ConfThreshold is the minimum detector score to keep a detection.
+	ConfThreshold float64
+	// IOUThreshold is the IoU cutoff used by non-maximum suppression.
+	IOUThreshold float64
+
+	// DebugDir, when set, enables diagnostic image output.
+	DebugDir string
 }
 
 func defaultOptions() Options {
 	return Options{
-		Charset:      CharsetFull,
-		Polarity:     PolarityAuto,
-		EnableDNN:    true,
-		DNNThreshold: 0.6,
-		OneRatio:     4.0,  // h/w > 4 → classify as '1'
-		MinusRatio:   0.5,
-		DecHRatio:    0.20, // decimal dot must be < 20% of median digit height
-		DecWRatio:    0.40, // aspect ratio (w/h) check — allow square and short dots
-		SpaceFactor:  2.5,
+		ConfThreshold: 0.25,
+		IOUThreshold:  0.45,
 	}
 }
 
 // Option is a functional option applied to Options.
 type Option func(*Options)
 
-// WithCharset sets the recognized character set.
-func WithCharset(c Charset) Option { return func(o *Options) { o.Charset = c } }
+// WithModelDir overrides the directory containing the ONNX models and classes.json.
+func WithModelDir(dir string) Option { return func(o *Options) { o.ModelDir = dir } }
 
-// WithPolarity forces polarity instead of auto-detecting.
-func WithPolarity(p Polarity) Option { return func(o *Options) { o.Polarity = p } }
-
-// WithExpectedDigits tells the engine how many digits to expect per row.
-// Use 0 (default) for auto-detection.
-func WithExpectedDigits(n int) Option { return func(o *Options) { o.ExpectedDigits = n } }
-
-// WithExpectedRows tells the engine how many rows of digits to expect.
-func WithExpectedRows(n int) Option { return func(o *Options) { o.ExpectedRows = n } }
-
-// WithROI restricts recognition to a sub-rectangle of the input image,
-// bypassing the display-detection stage entirely.
-func WithROI(r image.Rectangle) Option { return func(o *Options) { o.ROI = &r } }
-
-// WithPipeline replaces the automatic preprocessing chain with an explicit list of ops.
-func WithPipeline(ops ...preprocess.Op) Option {
-	return func(o *Options) { o.Pipeline = ops }
-}
-
-// WithProfile activates a named built-in display profile (e.g. "gas_pump").
+// WithProfile activates a named display-type hint (e.g. "tank_gauge").
 func WithProfile(name string) Option { return func(o *Options) { o.Profile = name } }
 
-// WithDNN enables or disables the ONNX DNN fallback classifier.
-func WithDNN(enabled bool) Option { return func(o *Options) { o.EnableDNN = enabled } }
+// WithExpectedRows tells the engine how many rows of digits to expect (0 = auto).
+func WithExpectedRows(n int) Option { return func(o *Options) { o.ExpectedRows = n } }
 
-// WithDNNThreshold sets the per-digit confidence floor; digits below this are
-// re-examined by the DNN classifier.
-func WithDNNThreshold(t float64) Option { return func(o *Options) { o.DNNThreshold = t } }
+// WithExpectedDigits tells the engine how many digits to expect per row (0 = auto).
+func WithExpectedDigits(n int) Option { return func(o *Options) { o.ExpectedDigits = n } }
 
-// WithRatios overrides the aspect-ratio thresholds for "1", "-", and decimal point.
-func WithRatios(one, minus, decH, decW float64) Option {
-	return func(o *Options) {
-		o.OneRatio = one
-		o.MinusRatio = minus
-		o.DecHRatio = decH
-		o.DecWRatio = decW
-	}
-}
+// WithConfThreshold sets the minimum detector score to keep a detection.
+func WithConfThreshold(t float64) Option { return func(o *Options) { o.ConfThreshold = t } }
 
-// WithDebugDir enables per-stage debug image output to the given directory.
+// WithIOUThreshold sets the IoU cutoff used by non-maximum suppression.
+func WithIOUThreshold(t float64) Option { return func(o *Options) { o.IOUThreshold = t } }
+
+// WithDebugDir enables diagnostic image output to the given directory.
 func WithDebugDir(dir string) Option { return func(o *Options) { o.DebugDir = dir } }
 
-// WithPrintSpaces enables insertion of spaces between digit groups.
-func WithPrintSpaces(s bool) Option { return func(o *Options) { o.PrintSpaces = s } }
+func applyOptions(opts []Option) Options {
+	o := defaultOptions()
+	for _, fn := range opts {
+		fn(&o)
+	}
+	return o
+}

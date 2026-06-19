@@ -1,13 +1,14 @@
-// Command septima-bench runs all test images from a ground_truth.json and prints
-// a pass/fail summary table.
+// Command septima-bench evaluates the recognizer against a directory's
+// ground_truth.json, reporting exact-string accuracy and mean per-character
+// (Levenshtein) accuracy.
 package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/brian-maloney/septima"
 )
@@ -26,97 +27,119 @@ type imageCase struct {
 }
 
 func main() {
-	dir := "tests"
-	if len(os.Args) > 1 {
-		dir = os.Args[1]
+	var (
+		modelDir = flag.String("models", "", "directory containing the ONNX models and classes.json")
+		hinted   = flag.Bool("hinted", false, "pass display_type/rows hints from ground truth")
+	)
+	flag.Parse()
+	if flag.NArg() != 1 {
+		fmt.Fprintln(os.Stderr, "usage: septima-bench [flags] DIR")
+		flag.PrintDefaults()
+		os.Exit(2)
 	}
-	gtPath := filepath.Join(dir, "ground_truth.json")
-	data, err := os.ReadFile(gtPath)
+	dir := flag.Arg(0)
+
+	data, err := os.ReadFile(filepath.Join(dir, "ground_truth.json"))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "bench: cannot read %s: %v\n", gtPath, err)
+		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
 	var gt groundTruth
 	if err := json.Unmarshal(data, &gt); err != nil {
-		fmt.Fprintf(os.Stderr, "bench: parse error: %v\n", err)
+		fmt.Fprintln(os.Stderr, "parse error:", err)
 		os.Exit(1)
 	}
 
-	type result struct {
-		file       string
-		expected   string
-		gotAuto    string
-		gotHinted  string
-		autoPass   bool
-		hintedPass bool
-	}
-
-	var results []result
-	autoPass, hintedPass := 0, 0
-
+	var exact, total, missing int
+	var charAccSum float64
 	for _, c := range gt.Images {
-		imgPath := filepath.Join(dir, c.File)
-		r := result{file: c.File, expected: c.Value}
+		path := filepath.Join(dir, c.File)
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			missing++
+			continue
+		}
+		total++
 
-		// Auto pass
-		got, err := septima.ReadFile(imgPath)
-		if err == nil {
-			r.gotAuto = got.Text
+		opts := []septima.Option{}
+		if *modelDir != "" {
+			opts = append(opts, septima.WithModelDir(*modelDir))
+		}
+		if *hinted {
+			opts = append(opts, septima.WithProfile(c.DisplayType))
+			if len(c.Rows) > 0 {
+				opts = append(opts, septima.WithExpectedRows(len(c.Rows)))
+			}
+		}
+
+		res, err := septima.ReadFile(path, opts...)
+		got := res.Text
+		status := "ok"
+		if err != nil {
+			got = ""
+			status = "ERR: " + err.Error()
+		}
+		ca := charAccuracy(got, c.Value)
+		charAccSum += ca
+		if got == c.Value {
+			exact++
+			fmt.Printf("PASS  %-16s %q\n", c.File, got)
 		} else {
-			r.gotAuto = "ERR: " + err.Error()
+			fmt.Printf("FAIL  %-16s got %q want %q (char %.0f%%) %s\n", c.File, got, c.Value, ca*100, status)
 		}
-		r.autoPass = r.gotAuto == c.Value
-		if r.autoPass {
-			autoPass++
-		}
-
-		// Hinted pass
-		hintOpts := []septima.Option{septima.WithProfile(c.DisplayType)}
-		if len(c.Rows) > 0 {
-			hintOpts = append(hintOpts, septima.WithExpectedRows(len(c.Rows)))
-		}
-		got2, err := septima.ReadFile(imgPath, hintOpts...)
-		if err == nil {
-			r.gotHinted = got2.Text
-		} else {
-			r.gotHinted = "ERR: " + err.Error()
-		}
-		r.hintedPass = r.gotHinted == c.Value
-		if r.hintedPass {
-			hintedPass++
-		}
-
-		results = append(results, r)
 	}
 
-	n := len(results)
-	fmt.Printf("%-55s  %-12s  %-12s  %-12s  %s  %s\n",
-		"File", "Expected", "Auto", "Hinted", "Auto", "Hint")
-	fmt.Printf("%s\n", strings.Repeat("-", 110))
-	for _, r := range results {
-		autoMark := "✗"
-		if r.autoPass {
-			autoMark = "✓"
-		}
-		hintMark := "✗"
-		if r.hintedPass {
-			hintMark = "✓"
-		}
-		fmt.Printf("%-55s  %-12s  %-12s  %-12s  %s   %s\n",
-			r.file, r.expected, truncate(r.gotAuto, 12), truncate(r.gotHinted, 12),
-			autoMark, hintMark)
+	fmt.Println("----")
+	if total == 0 {
+		fmt.Printf("no images found (%d listed, all missing)\n", missing)
+		return
 	}
-	fmt.Printf("\nAuto:   %d/%d (%.0f%%)\n", autoPass, n, 100*float64(autoPass)/float64(n))
-	fmt.Printf("Hinted: %d/%d (%.0f%%)\n", hintedPass, n, 100*float64(hintedPass)/float64(n))
-
-	if autoPass < n || hintedPass < n {
-		os.Exit(1)
-	}
+	fmt.Printf("exact: %d/%d (%.1f%%)   mean char acc: %.1f%%   missing: %d\n",
+		exact, total, 100*float64(exact)/float64(total), 100*charAccSum/float64(total), missing)
 }
 
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
+// charAccuracy returns 1 - normalized Levenshtein distance between got and want.
+func charAccuracy(got, want string) float64 {
+	if want == "" {
+		if got == "" {
+			return 1
+		}
+		return 0
 	}
-	return s[:n-1] + "…"
+	d := levenshtein([]rune(got), []rune(want))
+	acc := 1 - float64(d)/float64(len([]rune(want)))
+	if acc < 0 {
+		return 0
+	}
+	return acc
+}
+
+func levenshtein(a, b []rune) int {
+	prev := make([]int, len(b)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i := 1; i <= len(a); i++ {
+		cur := make([]int, len(b)+1)
+		cur[0] = i
+		for j := 1; j <= len(b); j++ {
+			cost := 1
+			if a[i-1] == b[j-1] {
+				cost = 0
+			}
+			cur[j] = min3(prev[j]+1, cur[j-1]+1, prev[j-1]+cost)
+		}
+		prev = cur
+	}
+	return prev[len(b)]
+}
+
+func min3(a, b, c int) int {
+	m := a
+	if b < m {
+		m = b
+	}
+	if c < m {
+		m = c
+	}
+	return m
 }

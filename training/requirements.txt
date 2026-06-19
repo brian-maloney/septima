@@ -1,0 +1,14 @@
+# Python training/export environment for septima (offline; not needed at inference).
+# Install into training/.venv:
+#   python3 -m venv training/.venv && source training/.venv/bin/activate
+#   pip install -r training/requirements.txt
+ultralytics>=8.3.0
+onnx>=1.16.0
+onnxruntime>=1.18.0
+opencv-python-headless>=4.9.0
+pillow>=10.0.0
+numpy>=1.26.0
+pyyaml>=6.0
+# Dataset acquisition (optional, used by datasets/prepare.py):
+kaggle>=1.6.0
+roboflow>=1.1.0

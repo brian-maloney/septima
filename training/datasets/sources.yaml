@@ -1,0 +1,37 @@
+# Public seven-segment YOLO datasets to merge into septima's training data.
+#
+# prepare.py downloads each source, reads its data.yaml to learn its own class
+# names, then remaps those names into septima's unified label space and routes
+# the set to the digit detector or the panel detector based on its classes.
+#
+# Unified label space (see models/classes.json):
+#   digits: 0 1 2 3 4 5 6 7 8 9   symbols: . : -
+# A source whose classes are all digit/symbol labels -> digit detector.
+# A source with a single generic "display/panel" class -> panel detector.
+#
+# class_map (optional) overrides name normalization for awkward sources:
+#   source_class_name: unified_label   (use "" to drop a class)
+
+sources:
+  - name: loclaurote_price
+    kind: kaggle
+    id: loclaurote/seven-segment-display-dataset-yolov5
+    # Price display, per-digit boxes. Classes: 0-9 plus a stray "66" (index 7),
+    # a mislabeled duplicate of 6 — map it to 6 so those boxes aren't dropped.
+    class_map:
+      "66": "6"
+
+  - name: cramatsu_v8
+    kind: kaggle
+    id: cramatsu/7-segment-display-yolov8
+    class_map: {}
+
+  # Roboflow source is optional (needs ROBOFLOW_API_KEY). Often a single
+  # "7-segment-display" class -> routed to the panel detector automatically.
+  - name: roboflow_7seg
+    kind: roboflow
+    workspace: bhautik-pithadiya
+    project: 7-segment-display-gxhnj
+    version: 5
+    enabled: false
+    class_map: {}

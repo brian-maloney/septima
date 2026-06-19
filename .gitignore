@@ -1,0 +1,24 @@
+old/
+
+# Python training environment and artifacts
+training/.venv/
+training/data/
+training/runs/
+training/datasets/_downloads/
+__pycache__/
+*.pyc
+
+# Trained weights (tracked models are the exported ONNX in models/)
+*.pt
+*.pth
+
+# Keep models/*.onnx and models/classes.json tracked.
+
+# Built command binaries (go build drops these in the repo root)
+/septima
+/septima-bench
+/septima-diag
+/septima-annotate
+
+# Local editor / OS cruft
+.DS_Store
