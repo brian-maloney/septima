@@ -55,7 +55,34 @@ leverage source for the reflective-LCD tank look, plus the only source of `.`/`:
 glyphs and (currently) of panel-detector data. Boxes stay exact through the
 geometric augmentation via a parallel label map.
 
-## Step 3 — train both stages (Ultralytics YOLO-nano, Apple Silicon)
+## Step 2.5 — held-out benchmark (measure real-world accuracy)
+
+`prepare.py` keeps each dataset's own `test/` split HELD OUT (never in
+`data_*.yaml`). Turn it into an end-to-end benchmark — ground-truth strings are
+derived from the test boxes:
+
+```sh
+python training/datasets/make_benchmark.py          # -> data/digits/test/ground_truth.json
+go run ./cmd/septima-bench training/data/digits/test # exact + char accuracy on real held-out images
+```
+
+This is the number that reflects "world can use" generality — score it after
+every training run alongside `tanktests` and `tests`.
+
+## Step 3 — train both stages (Ultralytics YOLO, Apple Silicon or GPU)
+
+Model size scales with `--model`: `yolo11n.pt` (nano, fast) → `yolo11s.pt` /
+`yolo11m.pt` (more accurate, want a GPU). On a CUDA box use `--device 0`; an
+A10G/L4 (AWS g5/g6) turns the multi-hour MPS runs into ~30–60 min, making a
+larger model + more epochs practical.
+
+```sh
+# example: larger model on a GPU box
+python training/train.py --stage panel  --model yolo11s.pt --device 0 --epochs 80
+python training/train.py --stage digits --model yolo11s.pt --device 0 --epochs 120 \
+    --data training/data/data_finetune.yaml
+```
+
 
 The digit detector trains on the combined digit data (public + synthetic + real
 tank crops) via `data_finetune.yaml`; the panel detector trains on the panel data

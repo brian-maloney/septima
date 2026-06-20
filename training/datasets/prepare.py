@@ -203,12 +203,25 @@ def route_boxes(lbl: Path, routing: dict) -> tuple[list[str], list[str]]:
     return digit_lines, panel_lines
 
 
+def detect_split(lbl: Path):
+    """Detect train/val/test from a dataset's own directory layout, so a
+    dataset's test split stays HELD OUT (never trained on) for benchmarking."""
+    parts = {p.lower() for p in lbl.parts}
+    if "test" in parts:
+        return "test"
+    if "valid" in parts or "val" in parts:
+        return "val"
+    if "train" in parts:
+        return "train"
+    return None
+
+
 def clean_source(roots: list[Path], prefix: str):
     """Remove a source's previously-merged files (so a re-run's reshuffled split
     can't leave stale duplicates in the wrong split). Only touches <prefix>_*,
     leaving synthetic (synth_*) and other sources intact."""
     for root in roots:
-        for split in ("train", "val"):
+        for split in ("train", "val", "test"):
             for kind in ("images", "labels"):
                 d = root / split / kind
                 if d.exists():
@@ -259,7 +272,7 @@ def main():
         return
 
     digits_root, panel_root = args.out / "digits", args.out / "panel"
-    counts = {"digit_img": 0, "panel_img": 0}
+    counts = {"digit_img": 0, "panel_img": 0, "digit_test": 0, "panel_test": 0}
 
     for src in sources:
         root = download(src, not args.no_download)
@@ -284,21 +297,29 @@ def main():
             digit_lines, panel_lines = route_boxes(lbl, routing)
             if panel_only:
                 digit_lines = []  # use boxes for panel synthesis only
-            split = "val" if i < n_val else "train"
+            split = detect_split(lbl)  # respect the dataset's own split
+            if split is None:          # flat dataset (e.g. Kaggle): carve a val set
+                split = "val" if i < n_val else "train"
             if digit_lines:
                 copy_pair(img, digit_lines, digits_root, split, src["name"], lbl.stem)
                 counts["digit_img"] += 1
+                if split == "test":
+                    counts["digit_test"] += 1
             if panel_lines:
                 copy_pair(img, panel_lines, panel_root, split, src["name"], lbl.stem)
                 counts["panel_img"] += 1
+                if split == "test":
+                    counts["panel_test"] += 1
 
     if counts["digit_img"]:
         write_data_yaml(digits_root / "data_digits.yaml", digits_root, DIGIT_LABELS)
     if counts["panel_img"]:
         write_data_yaml(panel_root / "data_panel.yaml", panel_root, PANEL_LABELS)
 
-    print(f"\nmerged: {counts['digit_img']} digit images -> {digits_root}")
-    print(f"        {counts['panel_img']} panel images -> {panel_root}")
+    print(f"\nmerged: {counts['digit_img']} digit images ({counts['digit_test']} held-out test) -> {digits_root}")
+    print(f"        {counts['panel_img']} panel images ({counts['panel_test']} held-out test) -> {panel_root}")
+    print("Held-out test splits are NOT in data_*.yaml. Build the end-to-end")
+    print("benchmark with: python training/datasets/make_benchmark.py")
     print("Run training/synth/render.py to add synthetic samples before training.")
 
 
