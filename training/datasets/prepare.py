@@ -249,6 +249,21 @@ def write_data_yaml(path: Path, root: Path, names: list[str]):
     }, sort_keys=False))
 
 
+def write_finetune_yaml(data_root: Path, names: list[str]):
+    """Digit training config combining the open-source/synthetic digits with the
+    real tank crops when present (real_tank is produced by cmd/septima-annotate
+    and is optional — without it this is just the full digit corpus)."""
+    train = ["digits/train/images"]
+    if (data_root / "real_tank" / "train" / "images").exists():
+        train.append("real_tank/train/images")
+    (data_root / "data_finetune.yaml").write_text(yaml.safe_dump({
+        "path": str(data_root.resolve()),
+        "train": train,
+        "val": "digits/val/images",
+        "names": {i: n for i, n in enumerate(names)},
+    }, sort_keys=False))
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -316,6 +331,7 @@ def main():
 
     if counts["digit_img"]:
         write_data_yaml(digits_root / "data_digits.yaml", digits_root, DIGIT_LABELS)
+        write_finetune_yaml(args.out, DIGIT_LABELS)
     if counts["panel_img"]:
         write_data_yaml(panel_root / "data_panel.yaml", panel_root, PANEL_LABELS)
 
