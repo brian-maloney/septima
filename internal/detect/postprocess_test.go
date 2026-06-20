@@ -71,6 +71,18 @@ func TestDedupeAcrossClassesSameBox(t *testing.T) {
 	}
 }
 
+func TestDedupeKeepsDecimalOverlappingDigit(t *testing.T) {
+	// A real '.' sits at the bottom-right of a '0', so its center falls inside
+	// the digit's box — but it's short, not a duplicate, and must be kept.
+	dets := []Detection{
+		{Class: 0, Score: 0.84, Box: image.Rect(287, 105, 359, 254)}, // '0', h=149
+		{Class: 10, Score: 0.31, Box: image.Rect(348, 229, 369, 260)}, // '.', h=31, center inside '0'
+	}
+	if got := DedupeAcrossClasses(dets, 0.5); len(got) != 2 {
+		t.Fatalf("decimal overlapping a digit must survive, got %d detections", len(got))
+	}
+}
+
 func TestDecodeYOLOMapsThroughTransform(t *testing.T) {
 	// 2 classes, 1 box. Layout: [cx,cy,w,h, score0, score1] each as one column.
 	// Box centered at (50,50) size 20x20 in model space, class 1 wins.

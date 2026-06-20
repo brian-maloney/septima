@@ -98,11 +98,12 @@ func DedupeAcrossClasses(dets []Detection, iouThreshold float64) []Detection {
 		overlaps := false
 		for _, k := range kept {
 			// Suppress on IoU, or when either box's center sits inside the other
-			// (catches duplicate thin '1' boxes — including a narrow box nested in
-			// a wider one — that overlap too little for IoU but clearly mark the
-			// same glyph). Genuinely adjacent digits sit a full pitch apart, so
-			// neither center falls inside the other.
-			if iou(d.Box, k.Box) > iouThreshold || centerInside(d.Box, k.Box) || centerInside(k.Box, d.Box) {
+			// AND the two are of similar height (catches duplicate thin '1' boxes,
+			// including a narrow box nested in a wider one). The height guard keeps
+			// a real decimal/colon — short, and often overlapping a tall neighbor's
+			// box corner — from being mistaken for a duplicate of that digit.
+			contained := centerInside(d.Box, k.Box) || centerInside(k.Box, d.Box)
+			if iou(d.Box, k.Box) > iouThreshold || (contained && heightSimilar(d.Box, k.Box)) {
 				overlaps = true
 				break
 			}
@@ -112,6 +113,20 @@ func DedupeAcrossClasses(dets []Detection, iouThreshold float64) []Detection {
 		}
 	}
 	return kept
+}
+
+// heightSimilar reports whether two boxes are close enough in height to be the
+// same glyph (vs a short punctuation mark overlapping a tall digit).
+func heightSimilar(a, b image.Rectangle) bool {
+	ha, hb := a.Dy(), b.Dy()
+	if ha == 0 || hb == 0 {
+		return false
+	}
+	lo, hi := ha, hb
+	if lo > hi {
+		lo, hi = hi, lo
+	}
+	return float64(lo) >= 0.6*float64(hi)
 }
 
 // centerInside reports whether the center of a lies within b.
