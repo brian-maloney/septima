@@ -14,11 +14,14 @@ import (
 	"image/png"
 	_ "image/png"
 	"os"
+
+	_ "golang.org/x/image/webp"
 	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/brian-maloney/septima/internal/detect"
+	"github.com/brian-maloney/septima/internal/imageproc"
 )
 
 func main() {
@@ -28,9 +31,10 @@ func main() {
 		stage     = flag.String("stage", "digits", "digits|panel (which class table)")
 		conf      = flag.Float64("conf", 0.25, "confidence threshold")
 		iou       = flag.Float64("iou", 0.45, "NMS IoU threshold")
-		cropStr   = flag.String("crop", "", "optional crop x0,y0,x1,y1 before detect")
-		usePanel  = flag.Bool("panel", false, "crop via FindBrightPanel heuristic first")
-		out       = flag.String("out", "", "write annotated PNG here")
+		cropStr    = flag.String("crop", "", "optional crop x0,y0,x1,y1 before detect")
+		usePanel   = flag.Bool("panel", false, "crop via FindBrightPanel heuristic first")
+		panelModel = flag.String("panel-model", "", "crop via this panel.onnx first (mirrors the live pipeline)")
+		out        = flag.String("out", "", "write annotated PNG here")
 	)
 	flag.Parse()
 	if flag.NArg() != 1 {
@@ -59,6 +63,26 @@ func main() {
 		work = cropTo(img, r)
 		off = r.Min
 		fmt.Fprintf(os.Stderr, "cropped to %v\n", r)
+	} else if *panelModel != "" {
+		pm, err := detect.OpenModel(*panelModel, len(classes.PanelClasses), classes.InputSize)
+		must(err)
+		defer pm.Close()
+		dets, derr := pm.Detect(img, *conf, *iou)
+		must(derr)
+		if len(dets) > 0 {
+			best := dets[0]
+			for _, d := range dets {
+				if d.Score > best.Score {
+					best = d
+				}
+			}
+			r := imageproc.PadRect(best.Box, img.Bounds(), 0.08)
+			work = cropTo(img, r)
+			off = r.Min
+			fmt.Fprintf(os.Stderr, "panel model -> %v (score %.3f, %d candidates)\n", r, best.Score, len(dets))
+		} else {
+			fmt.Fprintln(os.Stderr, "panel model found nothing; using full frame")
+		}
 	} else if *usePanel {
 		if r, ok := detect.FindBrightPanel(img); ok {
 			work = cropTo(img, r)

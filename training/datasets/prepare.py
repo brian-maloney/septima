@@ -1,24 +1,29 @@
 #!/usr/bin/env python3
-"""Download and merge public seven-segment YOLO datasets into septima's unified
-label space.
+"""Download and merge public seven-segment / digital-display datasets into
+septima's unified label space, feeding BOTH detection stages.
 
-Pipeline per source (configured in sources.yaml):
+Per source (configured in sources.yaml):
   1. download (Kaggle or Roboflow) into training/datasets/_downloads/<name>/
-  2. locate its data.yaml + image/label pairs (any common YOLO layout)
-  3. read the source's own class names, normalize each into septima's unified
-     labels, and decide whether the source is digit-level or panel-level
-  4. copy images + rewrite label class indices into the merged dataset
+  2. read its class names; classify each class as a digit/symbol or a panel class
+  3. for every image, route boxes per class:
+       - digit/symbol boxes -> digits dataset (classes 0-9 . : -)
+       - explicit panel/display boxes -> panel dataset (class: display)
+       - if an image has digit boxes but NO explicit panel box, synthesize one
+         from the union of its digit boxes (the display panel) -> panel dataset
+
+So a digit-only dataset trains both the digit detector and (via synthesized
+panel boxes) the panel detector; a mixed dataset contributes to both directly.
 
 Outputs (under --out, default training/data):
-  digits/{train,val}/{images,labels}/  + data_digits.yaml   (classes 0-9 . : -)
-  panel/{train,val}/{images,labels}/   + data_panel.yaml    (class: display)
+  digits/{train,val}/{images,labels}/  + digits/data_digits.yaml
+  panel/{train,val}/{images,labels}/   + panel/data_panel.yaml
 
 Usage:
-  python training/datasets/prepare.py --inspect          # download + print class names only
-  python training/datasets/prepare.py                    # full merge
-  python training/datasets/prepare.py --no-download       # re-merge already-downloaded sources
+  python training/datasets/prepare.py --inspect     # download + print class names
+  python training/datasets/prepare.py               # full merge
+  python training/datasets/prepare.py --no-download  # re-merge existing downloads
 
-Requires Kaggle credentials (~/.kaggle/kaggle.json) for kaggle sources and
+Requires Kaggle creds (~/.kaggle/kaggle.json) for kaggle sources and
 ROBOFLOW_API_KEY for roboflow sources. See training/README.md.
 """
 from __future__ import annotations
@@ -33,12 +38,10 @@ from pathlib import Path
 
 import yaml
 
-# Unified label space — index order must match models/classes.json digit_classes.
 DIGIT_LABELS = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", ".", ":", "-"]
 DIGIT_INDEX = {lbl: i for i, lbl in enumerate(DIGIT_LABELS)}
 PANEL_LABELS = ["display"]
 
-# Common alias normalization for symbol / digit class names found in the wild.
 NAME_ALIASES = {
     "dot": ".", "decimal": ".", "point": ".", "period": ".", "decimalpoint": ".",
     "colon": ":", "double_dot": ":", "doubledot": ":",
@@ -46,29 +49,33 @@ NAME_ALIASES = {
     "zero": "0", "one": "1", "two": "2", "three": "3", "four": "4",
     "five": "5", "six": "6", "seven": "7", "eight": "8", "nine": "9",
 }
-# Names that indicate a panel/display-level (single-object) dataset.
 PANEL_NAME_HINTS = {"display", "panel", "lcd", "led", "screen", "7-segment-display",
-                    "seven-segment-display", "sevensegment", "7segment", "ssd"}
+                    "seven-segment-display", "sevensegment", "7segment", "ssd",
+                    "meter", "counter", "digitalmeter", "screendisplay"}
 
 HERE = Path(__file__).resolve().parent
 DOWNLOADS = HERE / "_downloads"
 IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 
 
-def normalize_name(raw: str, class_map: dict) -> str | None:
-    """Map a source class name to a unified label, or None to drop it."""
+def classify_name(raw: str, class_map: dict) -> tuple[str, object]:
+    """Return ('digit', unified_idx) | ('panel', 0) | ('drop', None) for a class."""
     key = str(raw).strip()
     if key in class_map:
         v = class_map[key]
-        return v or None
+        if not v:
+            return "drop", None
+        if v in DIGIT_INDEX:
+            return "digit", DIGIT_INDEX[v]
+        return "panel", 0
     low = key.lower().replace(" ", "").replace("-", "").replace("_", "")
-    if key in DIGIT_INDEX:           # already "0".."9" or ".", ":", "-"
-        return key
+    if key in DIGIT_INDEX:
+        return "digit", DIGIT_INDEX[key]
     if low in NAME_ALIASES:
-        return NAME_ALIASES[low]
-    if len(key) == 1 and key in DIGIT_INDEX:
-        return key
-    return None
+        return "digit", DIGIT_INDEX[NAME_ALIASES[low]]
+    if low in PANEL_NAME_HINTS:
+        return "panel", 0
+    return "drop", None
 
 
 # ----------------------------------------------------------------------------- download
@@ -79,10 +86,8 @@ def download_kaggle(src: dict) -> Path:
         return dest
     dest.mkdir(parents=True, exist_ok=True)
     print(f"[{src['name']}] downloading kaggle dataset {src['id']} ...")
-    subprocess.run(
-        ["kaggle", "datasets", "download", "-d", src["id"], "-p", str(dest), "--unzip"],
-        check=True,
-    )
+    subprocess.run(["kaggle", "datasets", "download", "-d", src["id"],
+                    "-p", str(dest), "--unzip"], check=True)
     return dest
 
 
@@ -94,10 +99,19 @@ def download_roboflow(src: dict) -> Path:
     if not api_key:
         print(f"[{src['name']}] skipped: ROBOFLOW_API_KEY not set", file=sys.stderr)
         return dest
-    from roboflow import Roboflow  # imported lazily; optional dependency
-    rf = Roboflow(api_key=api_key)
-    proj = rf.workspace(src["workspace"]).project(src["project"])
-    proj.version(src["version"]).download("yolov8", location=str(dest))
+    try:
+        from roboflow import Roboflow
+        rf = Roboflow(api_key=api_key)
+        proj = rf.workspace(src["workspace"]).project(src["project"])
+        version = src.get("version")
+        if not version:  # default to the latest version
+            version = max(int(str(v.version).split("/")[-1]) for v in proj.versions())
+            print(f"[{src['name']}] using latest version {version}")
+        proj.version(int(version)).download("yolov8", location=str(dest))
+    except Exception as e:
+        print(f"[{src['name']}] roboflow download failed: {e}\n"
+              f"  (set an explicit 'version:' in sources.yaml, or check workspace/project)",
+              file=sys.stderr)
     return dest
 
 
@@ -105,57 +119,41 @@ def download(src: dict, do_download: bool) -> Path:
     dest = DOWNLOADS / src["name"]
     if not do_download:
         return dest
-    kind = src["kind"]
-    if kind == "kaggle":
+    if src["kind"] == "kaggle":
         return download_kaggle(src)
-    if kind == "roboflow":
+    if src["kind"] == "roboflow":
         return download_roboflow(src)
-    raise ValueError(f"unknown source kind: {kind}")
+    raise ValueError(f"unknown source kind: {src['kind']}")
 
 
 # ----------------------------------------------------------------------------- discovery
 
-def find_data_yaml(root: Path) -> Path | None:
+def read_class_names(root: Path) -> list[str]:
     for name in ("data.yaml", "data.yml", "dataset.yaml"):
         hits = sorted(root.rglob(name))
         if hits:
-            return hits[0]
-    return None
-
-
-def read_class_names(root: Path) -> list[str]:
-    dy = find_data_yaml(root)
-    if dy is None:
-        return []
-    with open(dy) as f:
-        data = yaml.safe_load(f) or {}
-    names = data.get("names", [])
-    if isinstance(names, dict):  # {0: '0', 1: '1', ...}
-        names = [names[k] for k in sorted(names)]
-    return [str(n) for n in names]
+            data = yaml.safe_load(hits[0].read_text()) or {}
+            names = data.get("names", [])
+            if isinstance(names, dict):
+                names = [names[k] for k in sorted(names)]
+            return [str(n) for n in names]
+    return []
 
 
 def iter_image_label_pairs(root: Path):
-    """Yield (image_path, label_path) for every YOLO pair under root.
-
-    Handles the standard layouts: <split>/images + <split>/labels, or a flat
-    images/ + labels/. Pairs an image to a .txt with the same stem.
-    """
-    label_files = [p for p in root.rglob("*.txt")
-                   if p.name.lower() not in {"readme.txt", "classes.txt"}]
-    for lbl in label_files:
+    for lbl in root.rglob("*.txt"):
+        if lbl.name.lower() in {"readme.txt", "classes.txt"}:
+            continue
         img = find_sibling_image(lbl)
         if img is not None:
             yield img, lbl
 
 
-def find_sibling_image(lbl: Path) -> Path | None:
-    # Try the parallel "labels" -> "images" directory first, then same dir.
+def find_sibling_image(lbl: Path):
     candidates = []
     parts = list(lbl.parts)
     if "labels" in parts:
-        img_dir = Path(*[("images" if seg == "labels" else seg) for seg in parts]).parent
-        candidates.append(img_dir)
+        candidates.append(Path(*[("images" if s == "labels" else s) for s in parts]).parent)
     candidates.append(lbl.parent)
     for d in candidates:
         for ext in IMG_EXTS:
@@ -167,50 +165,63 @@ def find_sibling_image(lbl: Path) -> Path | None:
 
 # ----------------------------------------------------------------------------- merge
 
-def build_remap(names: list[str], class_map: dict):
-    """Return (target_space, remap) where target_space is 'digit' or 'panel' and
-    remap maps source class index -> unified index (or None to drop)."""
-    normalized = [normalize_name(n, class_map) for n in names]
-    digit_hits = [n for n in normalized if n in DIGIT_INDEX]
-
-    # Panel-level if it has no digit/symbol classes, or a single generic class.
-    looks_panel = (not digit_hits) or all(
-        (n is None and names[i].lower().replace(" ", "") in PANEL_NAME_HINTS)
-        for i, n in enumerate(normalized)
-    )
-    if looks_panel or len(names) == 1 and not digit_hits:
-        remap = {i: 0 for i in range(len(names))}  # everything -> the single panel class
-        return "panel", remap
-
-    remap = {}
-    for i, n in enumerate(normalized):
-        remap[i] = DIGIT_INDEX[n] if n in DIGIT_INDEX else None
-    return "digit", remap
-
-
-def rewrite_label(lbl: Path, remap: dict) -> list[str]:
-    out = []
+def route_boxes(lbl: Path, routing: dict) -> tuple[list[str], list[str]]:
+    """Split a YOLO label file into (digit_lines, panel_lines) using the per-class
+    routing {src_idx: ('digit', uidx) | ('panel', 0) | ('drop', None)}.
+    When the image has digit boxes but no explicit panel box, synthesize a panel
+    box from the union of the digit boxes."""
+    digit_lines, panel_lines = [], []
+    digit_boxes = []  # (cx, cy, w, h) for union synthesis
+    has_explicit_panel = False
     for line in lbl.read_text().splitlines():
-        parts = line.split()
-        if len(parts) < 5:
+        p = line.split()
+        if len(p) < 5:
             continue
         try:
-            cls = int(float(parts[0]))
+            cls = int(float(p[0]))
+            cx, cy, w, h = map(float, p[1:5])
         except ValueError:
             continue
-        new = remap.get(cls)
-        if new is None:
-            continue
-        out.append(" ".join([str(new), *parts[1:5]]))
-    return out
+        kind, target = routing.get(cls, ("drop", None))
+        if kind == "digit":
+            digit_lines.append(f"{target} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}")
+            digit_boxes.append((cx, cy, w, h))
+        elif kind == "panel":
+            panel_lines.append(f"0 {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}")
+            has_explicit_panel = True
+
+    if not has_explicit_panel and digit_boxes:
+        x0 = min(cx - w / 2 for cx, _, w, _ in digit_boxes)
+        x1 = max(cx + w / 2 for cx, _, w, _ in digit_boxes)
+        y0 = min(cy - h / 2 for _, cy, _, h in digit_boxes)
+        y1 = max(cy + h / 2 for _, cy, _, h in digit_boxes)
+        # Pad ~8% horizontally / 18% vertically to mimic a bezel, clamp to frame.
+        pw, ph = (x1 - x0) * 0.08, (y1 - y0) * 0.18
+        x0, x1 = max(0.0, x0 - pw), min(1.0, x1 + pw)
+        y0, y1 = max(0.0, y0 - ph), min(1.0, y1 + ph)
+        panel_lines.append(f"0 {(x0+x1)/2:.6f} {(y0+y1)/2:.6f} {x1-x0:.6f} {y1-y0:.6f}")
+    return digit_lines, panel_lines
 
 
-def copy_pair(img: Path, lines: list[str], split_dir: Path, prefix: str, stem: str):
-    (split_dir / "images").mkdir(parents=True, exist_ok=True)
-    (split_dir / "labels").mkdir(parents=True, exist_ok=True)
+def clean_source(roots: list[Path], prefix: str):
+    """Remove a source's previously-merged files (so a re-run's reshuffled split
+    can't leave stale duplicates in the wrong split). Only touches <prefix>_*,
+    leaving synthetic (synth_*) and other sources intact."""
+    for root in roots:
+        for split in ("train", "val"):
+            for kind in ("images", "labels"):
+                d = root / split / kind
+                if d.exists():
+                    for f in d.glob(f"{prefix}_*"):
+                        f.unlink()
+
+
+def copy_pair(img: Path, lines: list[str], root: Path, split: str, prefix: str, stem: str):
+    (root / split / "images").mkdir(parents=True, exist_ok=True)
+    (root / split / "labels").mkdir(parents=True, exist_ok=True)
     base = f"{prefix}_{stem}"
-    shutil.copy2(img, split_dir / "images" / (base + img.suffix.lower()))
-    (split_dir / "labels" / (base + ".txt")).write_text("\n".join(lines) + "\n")
+    shutil.copy2(img, root / split / "images" / (base + img.suffix.lower()))
+    (root / split / "labels" / (base + ".txt")).write_text("\n".join(lines) + "\n")
 
 
 def write_data_yaml(path: Path, root: Path, names: list[str]):
@@ -229,9 +240,8 @@ def main():
     ap.add_argument("--sources", type=Path, default=HERE / "sources.yaml")
     ap.add_argument("--val-frac", type=float, default=0.15)
     ap.add_argument("--seed", type=int, default=1)
-    ap.add_argument("--no-download", action="store_true", help="reuse existing _downloads/")
-    ap.add_argument("--inspect", action="store_true",
-                    help="download and print each source's class names, then exit")
+    ap.add_argument("--no-download", action="store_true")
+    ap.add_argument("--inspect", action="store_true")
     args = ap.parse_args()
 
     random.seed(args.seed)
@@ -242,16 +252,14 @@ def main():
         for src in sources:
             root = download(src, not args.no_download)
             names = read_class_names(root)
-            target, remap = (build_remap(names, src.get("class_map", {}))
-                             if names else ("?", {}))
-            print(f"\n{src['name']} ({src['kind']}): {len(names)} classes -> {target}")
-            print(f"  names: {names}")
-            print(f"  remap: {remap}")
+            routing = {i: classify_name(n, src.get("class_map", {})) for i, n in enumerate(names)}
+            print(f"\n{src['name']} ({src['kind']}): {len(names)} classes")
+            print(f"  names:   {names}")
+            print(f"  routing: {routing}")
         return
 
-    digits_root = args.out / "digits"
-    panel_root = args.out / "panel"
-    counts = {"digit": 0, "panel": 0}
+    digits_root, panel_root = args.out / "digits", args.out / "panel"
+    counts = {"digit_img": 0, "panel_img": 0}
 
     for src in sources:
         root = download(src, not args.no_download)
@@ -262,30 +270,36 @@ def main():
         if not names:
             print(f"[{src['name']}] no data.yaml class names; skipping", file=sys.stderr)
             continue
-        target, remap = build_remap(names, src.get("class_map", {}))
-        dest_root = digits_root if target == "digit" else panel_root
-        print(f"[{src['name']}] {len(names)} classes -> {target} detector")
+        routing = {i: classify_name(n, src.get("class_map", {})) for i, n in enumerate(names)}
+        kinds = {k for k, _ in routing.values()}
+        print(f"[{src['name']}] {len(names)} classes -> "
+              f"{'digits ' if 'digit' in kinds else ''}{'panel' if kinds & {'digit', 'panel'} else ''}")
 
+        clean_source([digits_root, panel_root], src["name"])
         pairs = list(iter_image_label_pairs(root))
         random.shuffle(pairs)
         n_val = int(len(pairs) * args.val_frac)
+        panel_only = src.get("panel_only", False)
         for i, (img, lbl) in enumerate(pairs):
-            lines = rewrite_label(lbl, remap)
-            if not lines:
-                continue  # image has no boxes that survive remapping
+            digit_lines, panel_lines = route_boxes(lbl, routing)
+            if panel_only:
+                digit_lines = []  # use boxes for panel synthesis only
             split = "val" if i < n_val else "train"
-            copy_pair(img, lines, dest_root / split, src["name"], lbl.stem)
-            counts[target] += 1
+            if digit_lines:
+                copy_pair(img, digit_lines, digits_root, split, src["name"], lbl.stem)
+                counts["digit_img"] += 1
+            if panel_lines:
+                copy_pair(img, panel_lines, panel_root, split, src["name"], lbl.stem)
+                counts["panel_img"] += 1
 
-    if counts["digit"]:
+    if counts["digit_img"]:
         write_data_yaml(digits_root / "data_digits.yaml", digits_root, DIGIT_LABELS)
-    if counts["panel"]:
+    if counts["panel_img"]:
         write_data_yaml(panel_root / "data_panel.yaml", panel_root, PANEL_LABELS)
 
-    print(f"\nmerged: {counts['digit']} digit images -> {digits_root}")
-    print(f"        {counts['panel']} panel images -> {panel_root}")
-    print("Note: synthetic + annotated-real data are added to these dirs by the "
-          "render/annotate steps before training.")
+    print(f"\nmerged: {counts['digit_img']} digit images -> {digits_root}")
+    print(f"        {counts['panel_img']} panel images -> {panel_root}")
+    print("Run training/synth/render.py to add synthetic samples before training.")
 
 
 if __name__ == "__main__":

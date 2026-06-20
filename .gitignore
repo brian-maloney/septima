@@ -19,6 +19,7 @@ __pycache__/
 /septima-bench
 /septima-diag
 /septima-annotate
+/septima-panel-bootstrap
 
 # Local editor / OS cruft
 .DS_Store

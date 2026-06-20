@@ -49,6 +49,26 @@ func TestAssembleTwoRows(t *testing.T) {
 	}
 }
 
+// A strongly tilted single row (e.g. a calculator photographed at an angle) must
+// stay one row — its baseline slopes so endpoints don't vertically overlap, but
+// adjacent digits stay close (single-linkage).
+func TestAssembleTiltedRow(t *testing.T) {
+	var dets []detect.Detection
+	y := 100
+	for i := 0; i < 12; i++ {
+		x := 100 + i*60
+		dets = append(dets, det((i%9)+1, x, y, x+55, y+130, 0.9))
+		y += 15 // baseline climbs ~15px per digit -> 165px total span > one digit
+	}
+	got := Assemble(dets, tankClasses)
+	if len(got.Rows) != 1 {
+		t.Fatalf("tilted single row split into %d rows: %q", len(got.Rows), got.Text)
+	}
+	if len([]rune(got.Text)) != 12 {
+		t.Fatalf("expected 12 chars in one row, got %q", got.Text)
+	}
+}
+
 func TestAssembleEmpty(t *testing.T) {
 	if got := Assemble(nil, tankClasses); got.Text != "" || len(got.Rows) != 0 {
 		t.Fatalf("empty input should yield empty reading, got %+v", got)

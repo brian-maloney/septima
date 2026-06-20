@@ -9,7 +9,8 @@
 // correction.
 //
 // Usage:
-//   go run ./cmd/septima-annotate -in tanktests
+//
+//	go run ./cmd/septima-annotate -in tanktests
 package main
 
 import (
@@ -21,6 +22,8 @@ import (
 	"image/jpeg"
 	_ "image/png"
 	"os"
+
+	_ "golang.org/x/image/webp"
 	"path/filepath"
 	"strings"
 
@@ -83,7 +86,7 @@ func main() {
 			continue
 		}
 
-		crop, dets := detectOnPanel(img, model, names, *conf, *iou)
+		crop, dets := detectOnPanel(img, model, *conf, *iou)
 		reading := assemble.Assemble(dets, names)
 		stem := "tank_" + strings.TrimSuffix(c.File, filepath.Ext(c.File))
 		labels := yoloLabels(dets, crop.Bounds())
@@ -120,7 +123,7 @@ func main() {
 
 // detectOnPanel mirrors septima.Read's stage-1/stage-2 path and returns the
 // panel crop and the post-processed detections in crop coordinates.
-func detectOnPanel(img image.Image, model *detect.Model, names []string, conf, iou float64) (*image.RGBA, []detect.Detection) {
+func detectOnPanel(img image.Image, model *detect.Model, conf, iou float64) (*image.RGBA, []detect.Detection) {
 	region, ok := detect.FindBrightPanel(img)
 	if !ok {
 		region = img.Bounds()
@@ -131,7 +134,6 @@ func detectOnPanel(img image.Image, model *detect.Model, names []string, conf, i
 	dets, err := model.Detect(crop, conf, iou)
 	must(err)
 	dets = detect.DedupeAcrossClasses(dets, 0.5)
-	dets = detect.FilterPunctuationSpecks(dets, names)
 	return crop, dets
 }
 

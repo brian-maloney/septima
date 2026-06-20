@@ -47,27 +47,31 @@ func Assemble(dets []detect.Detection, classNames []string) Reading {
 	sort.Slice(sorted, func(i, j int) bool { return centerY(sorted[i].Box) < centerY(sorted[j].Box) })
 
 	medianH := medianHeight(sorted)
-	tol := medianH * 0.6
+	tol := medianH * 0.7
 
+	// Single-linkage clustering on center-y: start a new row only when a digit's
+	// center jumps more than tol from the PREVIOUS (nearest-below) digit. This
+	// chains a strongly tilted single row (adjacent digits stay close even as the
+	// baseline slopes) while still separating genuinely stacked rows (whose
+	// inter-row gap exceeds tol).
 	var rows [][]detect.Detection
 	var cur []detect.Detection
-	var bandCenter float64
+	var prevCy float64
 	for _, d := range sorted {
 		cy := centerY(d.Box)
 		if len(cur) == 0 {
 			cur = append(cur, d)
-			bandCenter = cy
+			prevCy = cy
 			continue
 		}
-		if cy-bandCenter > tol {
+		if cy-prevCy > tol {
 			rows = append(rows, cur)
 			cur = []detect.Detection{d}
-			bandCenter = cy
+			prevCy = cy
 			continue
 		}
 		cur = append(cur, d)
-		// Running mean keeps the band centered as the row fills in.
-		bandCenter = (bandCenter*float64(len(cur)-1) + cy) / float64(len(cur))
+		prevCy = cy
 	}
 	if len(cur) > 0 {
 		rows = append(rows, cur)

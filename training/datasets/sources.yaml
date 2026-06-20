@@ -26,12 +26,49 @@ sources:
     id: cramatsu/7-segment-display-yolov8
     class_map: {}
 
-  # Roboflow source is optional (needs ROBOFLOW_API_KEY). Often a single
-  # "7-segment-display" class -> routed to the panel detector automatically.
-  - name: roboflow_7seg
+  # --- Roboflow Universe (need ROBOFLOW_API_KEY; version null = latest) ---
+  # Real photos of displays/meters with bbox annotations. Each set's annotations
+  # are routed per-box: digit/symbol boxes -> digit detector, display/meter boxes
+  # -> panel detector, and digit-only images also synthesize a panel box.
+  # Run `prepare.py --inspect` after first download to verify class routing and
+  # add class_map overrides if a set uses odd names.
+
+  - name: rf_labmonitor_digit_display   # has BOTH digit + display classes
+    kind: roboflow
+    workspace: labmonitor
+    project: 7-segment-digit-number-display
+    version: null
+    class_map: {}
+
+  - name: rf_digital_meter
+    kind: roboflow
+    workspace: piyush-kumar-uou3u
+    project: digital-meter-gzxcg
+    version: null
+    class_map: {}
+
+  # Disabled: this set turned out to be ANALOG utility meters (dials/odometers),
+  # off-target for a seven-segment display reader. Including its photos in the
+  # panel detector risks biasing it toward circular-gauge / cluttered shapes.
+  - name: rf_utility_meter
+    kind: roboflow
+    workspace: watermeter-jvlgr
+    project: utility-meter-reading-dataset-for-automatic-reading-yolo
+    version: null
+    enabled: false
+    panel_only: true
+    class_map: {}
+
+  - name: rf_7seg_bhautik
     kind: roboflow
     workspace: bhautik-pithadiya
     project: 7-segment-display-gxhnj
-    version: 5
-    enabled: false
+    version: null
+    class_map: {}
+
+  - name: rf_7seg_uk
+    kind: roboflow
+    workspace: uk-jklsw
+    project: 7-segment-display-8qb3b
+    version: null
     class_map: {}

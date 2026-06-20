@@ -114,41 +114,6 @@ func DedupeAcrossClasses(dets []Detection, iouThreshold float64) []Detection {
 	return kept
 }
 
-// FilterPunctuationSpecks drops '.'/':'/'-' detections whose height is far below
-// the median digit height — on real LCD photos these are usually dust or screen
-// artifacts rather than real punctuation. Digit detections are never dropped.
-// names maps class index to its single-rune label (e.g. "0".."9",".",":","-").
-func FilterPunctuationSpecks(dets []Detection, names []string) []Detection {
-	var digitH []int
-	for _, d := range dets {
-		if IsDigitClass(d.Class, names) {
-			digitH = append(digitH, d.Box.Dy())
-		}
-	}
-	if len(digitH) == 0 {
-		return dets
-	}
-	sort.Ints(digitH)
-	minH := int(0.4 * float64(digitH[len(digitH)/2]))
-
-	out := dets[:0]
-	for _, d := range dets {
-		if !IsDigitClass(d.Class, names) && d.Box.Dy() < minH {
-			continue
-		}
-		out = append(out, d)
-	}
-	return out
-}
-
-// IsDigitClass reports whether the class maps to a numeric glyph ('0'-'9').
-func IsDigitClass(class int, names []string) bool {
-	if class < 0 || class >= len(names) {
-		return false
-	}
-	return len(names[class]) == 1 && names[class][0] >= '0' && names[class][0] <= '9'
-}
-
 // centerInside reports whether the center of a lies within b.
 func centerInside(a, b image.Rectangle) bool {
 	cx := (a.Min.X + a.Max.X) / 2

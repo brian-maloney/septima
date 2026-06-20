@@ -12,6 +12,8 @@ import (
 	"os"
 	"sort"
 
+	_ "golang.org/x/image/webp"
+
 	"github.com/brian-maloney/septima/internal/assemble"
 	"github.com/brian-maloney/septima/internal/detect"
 	"github.com/brian-maloney/septima/internal/imageproc"
@@ -79,11 +81,9 @@ func Read(img image.Image, opts ...Option) (Result, error) {
 	}
 
 	// Class-agnostic dedup removes duplicate boxes the per-class NMS misses
-	// (e.g. the same glyph detected as both '9' and '4'). Then drop punctuation
-	// "specks" — '.'/':'/'-' detections far smaller than the digit baseline,
-	// which on real LCDs are usually dust or screen artifacts.
+	// (e.g. the same glyph detected as both '9' and '4', or a narrow '1' box
+	// nested in a wider one).
 	dets = detect.DedupeAcrossClasses(dets, 0.5)
-	dets = detect.FilterPunctuationSpecks(dets, classes.DigitClasses)
 
 	reading := assemble.Assemble(dets, classes.DigitClasses)
 	return toResult(reading), nil

@@ -11,16 +11,18 @@ source training/.venv/bin/activate
 pip install -r training/requirements.txt
 ```
 
-### Kaggle credentials (for the public datasets)
-The merge step downloads public 7-seg datasets via the Kaggle CLI. Create an API
-token at https://www.kaggle.com/settings → "Create New Token", then:
+### Dataset credentials
+Kaggle (CLI): create a token at https://www.kaggle.com/settings → "Create New
+Token", then:
 
 ```sh
 mkdir -p ~/.kaggle && mv ~/Downloads/kaggle.json ~/.kaggle/ && chmod 600 ~/.kaggle/kaggle.json
 ```
 
-(Optional) Roboflow source: `export ROBOFLOW_API_KEY=...` and set `enabled: true`
-for `roboflow_7seg` in `datasets/sources.yaml`.
+Roboflow (real meter/display photos for generality): get a key at
+https://app.roboflow.com → Settings → API, then `export ROBOFLOW_API_KEY=...`.
+The roboflow sources in `datasets/sources.yaml` download the latest version of
+each project automatically.
 
 ## Step 1 — public datasets → unified YOLO data
 
@@ -53,24 +55,37 @@ leverage source for the reflective-LCD tank look, plus the only source of `.`/`:
 glyphs and (currently) of panel-detector data. Boxes stay exact through the
 geometric augmentation via a parallel label map.
 
-## Step 3 — train (Ultralytics YOLO-nano, Apple Silicon)
+## Step 3 — train both stages (Ultralytics YOLO-nano, Apple Silicon)
+
+The digit detector trains on the combined digit data (public + synthetic + real
+tank crops) via `data_finetune.yaml`; the panel detector trains on the panel data
+(synthetic scenes + panel boxes synthesized from every digit image + any explicit
+display/meter boxes from real datasets).
 
 ```sh
-python training/train.py --stage digits --epochs 100   # -> training/runs/digits/
-python training/train.py --stage panel  --epochs 60    # -> training/runs/panel/
+# digit detector (general): from base weights on the full digit corpus
+python training/train.py --stage digits --data training/data/data_finetune.yaml --epochs 100
+# panel detector
+python training/train.py --stage panel  --epochs 60
 ```
 
-`--device mps` by default (override with `--device cpu` or `0` for CUDA).
+`--device mps` by default (override with `--device cpu` or `0` for CUDA). To
+fine-tune from existing weights instead of training fresh, add
+`--model training/runs/<run>/weights/best.pt`.
 
 ## Step 4 — export to ONNX (installs into models/)
 
 ```sh
-python training/export_onnx.py --stage digits   # -> models/digits.onnx
-python training/export_onnx.py --stage panel    # -> models/panel.onnx
+python training/export_onnx.py --stage digits --weights training/runs/digits/weights/best.pt
+python training/export_onnx.py --stage panel  --weights training/runs/panel/weights/best.pt
+go run ./cmd/septima-bench tanktests   # regression
+go run ./cmd/septima-bench tests       # generalization
 ```
 
 Export verifies the model's class order against `models/classes.json` and records
-the input size. The Go engine then loads these directly.
+the input size. Once `models/panel.onnx` exists, the Go pipeline uses it for
+stage-1 automatically (falling back to the bright-panel heuristic only if it
+finds nothing).
 
 ## Step 5 — fine-tune on real crops (closes the synthetic→real gap)
 
