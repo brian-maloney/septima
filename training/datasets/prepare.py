@@ -73,6 +73,9 @@ def classify_name(raw: str, class_map: dict) -> tuple[str, object]:
         return "digit", DIGIT_INDEX[key]
     if low in NAME_ALIASES:
         return "digit", DIGIT_INDEX[NAME_ALIASES[low]]
+    # "digit_0".."digit_9" (and "digit0"..) -> the bare digit.
+    if low.startswith("digit") and low[5:] in DIGIT_INDEX:
+        return "digit", DIGIT_INDEX[low[5:]]
     if low in PANEL_NAME_HINTS:
         return "panel", 0
     return "drop", None
