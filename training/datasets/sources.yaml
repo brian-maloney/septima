@@ -37,14 +37,14 @@ sources:
     kind: roboflow
     workspace: labmonitor
     project: 7-segment-digit-number-display
-    version: null
+    version: 1
     class_map: {}
 
   - name: rf_digital_meter
     kind: roboflow
     workspace: piyush-kumar-uou3u
     project: digital-meter-gzxcg
-    version: null
+    version: 1
     class_map: {}
 
   # 7-seg WITH COLONS (21 classes incl ':' and '.') — directly targets the clock
@@ -53,35 +53,35 @@ sources:
     kind: roboflow
     workspace: seven-segment-display
     project: 7-segment-tmnsi
-    version: null
+    version: 5
     class_map: {}
 
   - name: rf_sandi
     kind: roboflow
     workspace: pocorc
     project: seven-segment-digits-x5td4
-    version: null
+    version: 8
     class_map: {}
 
   - name: rf_digitfinder
     kind: roboflow
     workspace: 7-segment-display-recongnition
     project: digit-finder-zrmco
-    version: null
+    version: 7
     class_map: {}
 
   - name: rf_charlie
     kind: roboflow
     workspace: charlie-srmko
     project: seven-segment-digits-uptcy
-    version: null
+    version: 10
     class_map: {}
 
   - name: rf_adikoke   # likely digit + display classes (feeds both stages)
     kind: roboflow
     workspace: adikoke
     project: 7-segment-digit-number-display-av1aw
-    version: null
+    version: 1
     class_map: {}
 
   # Disabled: this set turned out to be ANALOG utility meters (dials/odometers),
@@ -100,12 +100,12 @@ sources:
     kind: roboflow
     workspace: bhautik-pithadiya
     project: 7-segment-display-gxhnj
-    version: null
+    version: 5
     class_map: {}
 
   - name: rf_7seg_uk
     kind: roboflow
     workspace: uk-jklsw
     project: 7-segment-display-8qb3b
-    version: null
+    version: 2
     class_map: {}
