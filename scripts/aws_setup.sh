@@ -36,8 +36,19 @@ die() { printf '\n!! %s\n' "$*" >&2; exit 1; }
 
 # --- 1. Python environment ---------------------------------------------------
 command -v python3 >/dev/null || die "python3 not found"
+
+# Ubuntu/Debian ship python3 without venv/ensurepip by default — install it.
+if ! python3 -c 'import ensurepip' >/dev/null 2>&1; then
+  PYVER="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+  say "Installing python venv support (python${PYVER}-venv) — needs sudo"
+  sudo apt-get update -qq
+  sudo apt-get install -y "python${PYVER}-venv" python3-pip \
+    || die "could not install python${PYVER}-venv; run: sudo apt install python${PYVER}-venv"
+fi
+
 say "Setting up venv at training/.venv"
-[ -d training/.venv ] || python3 -m venv training/.venv
+# Recreate if missing or left half-built by a previous failed run.
+[ -x training/.venv/bin/python3 ] || { rm -rf training/.venv; python3 -m venv training/.venv; }
 # shellcheck disable=SC1091
 source training/.venv/bin/activate
 pip install --quiet --upgrade pip
