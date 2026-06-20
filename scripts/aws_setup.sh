@@ -47,8 +47,11 @@ if ! python3 -c 'import ensurepip' >/dev/null 2>&1; then
 fi
 
 say "Setting up venv at training/.venv"
-# Recreate if missing or left half-built by a previous failed run.
-[ -x training/.venv/bin/python3 ] || { rm -rf training/.venv; python3 -m venv training/.venv; }
+# Recreate when bin/activate is missing — a venv that failed at the ensurepip
+# step leaves bin/python3 behind but never writes the activate scripts, so check
+# for activate specifically rather than the interpreter.
+[ -f training/.venv/bin/activate ] || { rm -rf training/.venv; python3 -m venv training/.venv; }
+[ -f training/.venv/bin/activate ] || die "venv creation failed; run: sudo apt install python3-venv"
 # shellcheck disable=SC1091
 source training/.venv/bin/activate
 pip install --quiet --upgrade pip
