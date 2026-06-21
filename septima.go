@@ -43,43 +43,39 @@ func Read(img image.Image, opts ...Option) (Result, error) {
 		return Result{}, fmt.Errorf("septima: %w", err)
 	}
 
-	// Stage 1: locate the display panel and crop to it (with padding). Prefer the
-	// trained panel.onnx; if it is unavailable or finds nothing, fall back to the
-	// classical bright-panel heuristic; failing that, use the full frame.
-	panelImg := img
-	offset := image.Point{}
-	region, found := image.Rectangle{}, false
-	if o.SkipPanel {
-		// diagnostics / pre-cropped input: run digits on the image as given
-	} else if panel, err := detect.OpenModel(modelPath(modelDir, "panel.onnx"), len(classes.PanelClasses), classes.InputSize); err == nil {
-		defer panel.Close()
-		if dets, derr := panel.Detect(img, o.ConfThreshold, o.IOUThreshold); derr == nil && len(dets) > 0 {
-			region, found = bestDetection(dets).Box, true
-		}
-	}
-	if !found && !o.SkipPanel {
-		region, found = detect.FindBrightPanel(img)
-	}
-	if found {
-		region = imageproc.PadRect(region, img.Bounds(), 0.08)
-		panelImg = imageproc.Crop(img, region)
-		offset = region.Min
-	}
-
-	// Stage 2: detect glyphs within the panel crop.
 	digits, err := detect.OpenModel(modelPath(modelDir, "digits.onnx"), len(classes.DigitClasses), classes.InputSize)
 	if err != nil {
 		return Result{}, fmt.Errorf("septima: open digit model: %w", err)
 	}
 	defer digits.Close()
 
-	dets, err := digits.Detect(panelImg, o.ConfThreshold, o.IOUThreshold)
+	// Adaptive localization. Candidate A: run the digit detector on the full
+	// frame — best when the display already fills the frame, since cropping then
+	// over-scales the glyphs out of the detector's training distribution.
+	dets, err := digits.Detect(img, o.ConfThreshold, o.IOUThreshold)
 	if err != nil {
 		return Result{}, fmt.Errorf("septima: digit detection: %w", err)
 	}
-	// Map crop-space boxes back into original image coordinates.
-	for i := range dets {
-		dets[i].Box = dets[i].Box.Add(offset)
+
+	// Candidate B: localize the panel (trained panel.onnx, else the bright-panel
+	// heuristic) and detect within the crop — best when the display is a small
+	// part of a larger scene (the tank), where full-frame glyphs are too small.
+	// Keep whichever candidate the detector is more confident about.
+	if !o.SkipPanel {
+		if region, ok := locatePanel(img, modelDir, classes, o); ok {
+			region = imageproc.PadRect(region, img.Bounds(), 0.08)
+			if cropDets, derr := digits.Detect(imageproc.Crop(img, region), o.ConfThreshold, o.IOUThreshold); derr == nil {
+				for i := range cropDets {
+					cropDets[i].Box = cropDets[i].Box.Add(region.Min)
+				}
+				// Keep whichever candidate the detector is more confident about.
+				// A needed crop (tank, where full-frame glyphs are tiny) wins by a
+				// wide margin; an already-framed display favors the full frame.
+				if digitScore(cropDets) > digitScore(dets) {
+					dets = cropDets
+				}
+			}
+		}
 	}
 
 	// Class-agnostic dedup removes duplicate boxes the per-class NMS misses
@@ -107,6 +103,28 @@ func toResult(r assemble.Reading) Result {
 		res.Rows = append(res.Rows, gr)
 	}
 	return res
+}
+
+// locatePanel finds the display region: the trained panel.onnx if available and
+// it detects something, else the classical bright-panel heuristic.
+func locatePanel(img image.Image, modelDir string, classes detect.Classes, o Options) (image.Rectangle, bool) {
+	if panel, err := detect.OpenModel(modelPath(modelDir, "panel.onnx"), len(classes.PanelClasses), classes.InputSize); err == nil {
+		defer panel.Close()
+		if dets, derr := panel.Detect(img, o.ConfThreshold, o.IOUThreshold); derr == nil && len(dets) > 0 {
+			return bestDetection(dets).Box, true
+		}
+	}
+	return detect.FindBrightPanel(img)
+}
+
+// digitScore sums detection confidences — used to pick the localization
+// candidate the detector is most confident about.
+func digitScore(dets []detect.Detection) float64 {
+	var s float64
+	for _, d := range dets {
+		s += d.Score
+	}
+	return s
 }
 
 // classIndex returns the class index whose single-rune label is r, or -1.
