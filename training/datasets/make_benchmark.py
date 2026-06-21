@@ -60,8 +60,16 @@ def derive_string(boxes) -> str:
     lines = []
     for row in rows:
         row.sort(key=lambda b: b[1])  # left-to-right
-        lines.append("".join(DIGIT_LABELS[b[0]] for b in row))
-    return "\n".join(lines)
+        lines.append(trim_edge_punct("".join(DIGIT_LABELS[b[0]] for b in row)))
+    return "\n".join(line for line in lines if line)
+
+
+def trim_edge_punct(s: str) -> str:
+    """Mirror the Go assembler: a reading never starts with '.'/':' nor ends with
+    '.'/':'/'-'. Keeps the GT consistent with the pipeline's normalization."""
+    s = s.lstrip(".:")
+    s = s.rstrip(".:-")
+    return s
 
 
 def main():

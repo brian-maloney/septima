@@ -85,6 +85,12 @@ func Read(img image.Image, opts ...Option) (Result, error) {
 	// nested in a wider one).
 	dets = detect.DedupeAcrossClasses(dets, 0.5)
 
+	// A colon is two stacked dots the detector often reports as two decimals —
+	// merge such pairs back into a single ':'.
+	if dot, col := classIndex(classes.DigitClasses, '.'), classIndex(classes.DigitClasses, ':'); dot >= 0 && col >= 0 {
+		dets = detect.MergeColonDots(dets, dot, col)
+	}
+
 	reading := assemble.Assemble(dets, classes.DigitClasses)
 	return toResult(reading), nil
 }
@@ -99,6 +105,16 @@ func toResult(r assemble.Reading) Result {
 		res.Rows = append(res.Rows, gr)
 	}
 	return res
+}
+
+// classIndex returns the class index whose single-rune label is r, or -1.
+func classIndex(names []string, r rune) int {
+	for i, n := range names {
+		if len(n) == 1 && rune(n[0]) == r {
+			return i
+		}
+	}
+	return -1
 }
 
 func bestDetection(dets []detect.Detection) detect.Detection {

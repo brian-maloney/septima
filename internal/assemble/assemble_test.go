@@ -69,6 +69,37 @@ func TestAssembleTiltedRow(t *testing.T) {
 	}
 }
 
+func TestTrimEdgePunctuation(t *testing.T) {
+	mk := func(s string) []Char {
+		var c []Char
+		for _, r := range s {
+			c = append(c, Char{R: r})
+		}
+		return c
+	}
+	str := func(c []Char) string {
+		var b []rune
+		for _, ch := range c {
+			b = append(b, ch.R)
+		}
+		return string(b)
+	}
+	cases := map[string]string{
+		".153.": "153", // leading + trailing dot
+		":24":   "24",  // leading colon
+		"812.":  "812", // trailing dot
+		"-5":    "-5",  // leading minus kept
+		"5-":    "5",   // trailing minus dropped
+		".:":    "",    // punctuation only
+		"0.68":  "0.68", // interior decimal untouched
+	}
+	for in, want := range cases {
+		if got := str(trimEdgePunctuation(mk(in))); got != want {
+			t.Errorf("trimEdgePunctuation(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestAssembleEmpty(t *testing.T) {
 	if got := Assemble(nil, tankClasses); got.Text != "" || len(got.Rows) != 0 {
 		t.Fatalf("empty input should yield empty reading, got %+v", got)

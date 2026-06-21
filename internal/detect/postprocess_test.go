@@ -83,6 +83,48 @@ func TestDedupeKeepsDecimalOverlappingDigit(t *testing.T) {
 	}
 }
 
+func TestMergeColonDots(t *testing.T) {
+	const dot, colon = 10, 11
+	// Two stacked dots (same x, separated vertically within a digit height) + two
+	// digits ~349px tall -> the dots become one ':'.
+	dets := []Detection{
+		{Class: 2, Score: 0.9, Box: image.Rect(517, 292, 706, 641)},
+		{Class: dot, Score: 0.66, Box: image.Rect(710, 583, 753, 635)},
+		{Class: dot, Score: 0.65, Box: image.Rect(716, 393, 748, 428)},
+		{Class: 4, Score: 0.9, Box: image.Rect(760, 302, 930, 634)},
+	}
+	got := MergeColonDots(dets, dot, colon)
+	colons, dots := 0, 0
+	for _, d := range got {
+		switch d.Class {
+		case colon:
+			colons++
+		case dot:
+			dots++
+		}
+	}
+	if colons != 1 || dots != 0 {
+		t.Fatalf("expected 1 colon and 0 dots, got %d colons %d dots", colons, dots)
+	}
+}
+
+func TestMergeColonDotsKeepsSeparateRowsDecimals(t *testing.T) {
+	const dot, colon = 10, 11
+	// Two decimals a full row apart (different rows of a gas pump) must NOT merge.
+	dets := []Detection{
+		{Class: 8, Score: 0.9, Box: image.Rect(0, 0, 50, 90)},   // digit, row 1
+		{Class: dot, Score: 0.6, Box: image.Rect(55, 70, 65, 88)}, // '.' row 1
+		{Class: 1, Score: 0.9, Box: image.Rect(0, 300, 50, 390)}, // digit, row 2
+		{Class: dot, Score: 0.6, Box: image.Rect(55, 370, 65, 388)}, // '.' row 2 (x-aligned, far below)
+	}
+	got := MergeColonDots(dets, dot, colon)
+	for _, d := range got {
+		if d.Class == colon {
+			t.Fatalf("decimals on separate rows must not merge into a colon")
+		}
+	}
+}
+
 func TestDecodeYOLOMapsThroughTransform(t *testing.T) {
 	// 2 classes, 1 box. Layout: [cx,cy,w,h, score0, score1] each as one column.
 	// Box centered at (50,50) size 20x20 in model space, class 1 wins.

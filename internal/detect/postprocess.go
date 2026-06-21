@@ -115,6 +115,81 @@ func DedupeAcrossClasses(dets []Detection, iouThreshold float64) []Detection {
 	return kept
 }
 
+// MergeColonDots replaces a pair of vertically-stacked '.' detections (the two
+// dots of a colon, which the digit detector commonly reports as two separate
+// decimals) with a single ':' detection. It is constrained so it won't merge the
+// decimals of two stacked rows: the dots must be x-aligned (within a dot width)
+// and separated vertically by only a fraction of a digit's height.
+func MergeColonDots(dets []Detection, dotClass, colonClass int) []Detection {
+	medH := medianDigitHeight(dets, dotClass, colonClass)
+	if medH <= 0 {
+		return dets
+	}
+	used := make([]bool, len(dets))
+	var out []Detection
+	for i := 0; i < len(dets); i++ {
+		if used[i] || dets[i].Class != dotClass {
+			continue
+		}
+		for j := i + 1; j < len(dets); j++ {
+			if used[j] || dets[j].Class != dotClass {
+				continue
+			}
+			ax, ay := boxCenter(dets[i].Box)
+			bx, by := boxCenter(dets[j].Box)
+			xtol := maxInt(dets[i].Box.Dx(), dets[j].Box.Dx())
+			ygap := absInt(ay - by)
+			if absInt(ax-bx) <= xtol && ygap >= int(0.2*medH) && ygap <= int(0.75*medH) {
+				score := dets[i].Score
+				if dets[j].Score > score {
+					score = dets[j].Score
+				}
+				out = append(out, Detection{Class: colonClass, Score: score, Box: dets[i].Box.Union(dets[j].Box)})
+				used[i], used[j] = true, true
+				break
+			}
+		}
+	}
+	for i := range dets {
+		if !used[i] {
+			out = append(out, dets[i])
+		}
+	}
+	return out
+}
+
+func medianDigitHeight(dets []Detection, dotClass, colonClass int) float64 {
+	var hs []int
+	for _, d := range dets {
+		if d.Class != dotClass && d.Class != colonClass {
+			hs = append(hs, d.Box.Dy())
+		}
+	}
+	if len(hs) == 0 {
+		return 0
+	}
+	sort.Ints(hs)
+	return float64(hs[len(hs)/2])
+}
+
+func boxCenter(r image.Rectangle) (int, int) {
+	return (r.Min.X + r.Max.X) / 2, (r.Min.Y + r.Max.Y) / 2
+}
+
+func absInt(a int) int {
+	if a < 0 {
+		return -a
+	}
+	return a
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
 // heightSimilar reports whether two boxes are close enough in height to be the
 // same glyph (vs a short punctuation mark overlapping a tall digit).
 func heightSimilar(a, b image.Rectangle) bool {

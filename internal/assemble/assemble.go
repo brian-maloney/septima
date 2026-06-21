@@ -81,22 +81,28 @@ func Assemble(dets []detect.Detection, classNames []string) Reading {
 	var allText []string
 	for _, group := range rows {
 		sort.Slice(group, func(i, j int) bool { return centerX(group[i].Box) < centerX(group[j].Box) })
-		var sb strings.Builder
 		var chars []Char
-		box := group[0].Box
-		var confSum float64
 		for _, d := range group {
 			r := classRune(d.Class, classNames)
 			if r == 0 {
 				continue
 			}
-			sb.WriteRune(r)
 			chars = append(chars, Char{R: r, Box: d.Box, Confidence: d.Score})
-			box = box.Union(d.Box)
-			confSum += d.Score
 		}
+		// A reading never starts or ends with '.'/':' (and never ends with '-'),
+		// so trim such edge glyphs — they're spurious punctuation. A leading '-'
+		// (negative) is kept. Rows left empty (punctuation-only) are dropped.
+		chars = trimEdgePunctuation(chars)
 		if len(chars) == 0 {
 			continue
+		}
+		var sb strings.Builder
+		box := chars[0].Box
+		var confSum float64
+		for _, c := range chars {
+			sb.WriteRune(c.R)
+			box = box.Union(c.Box)
+			confSum += c.Confidence
 		}
 		rowConf := confSum / float64(len(chars))
 		row := Row{Text: sb.String(), Chars: chars, Box: box, Confidence: rowConf}
@@ -111,6 +117,23 @@ func Assemble(dets []detect.Detection, classNames []string) Reading {
 	}
 	reading.Text = strings.Join(allText, "\n")
 	return reading
+}
+
+// trimEdgePunctuation removes spurious '.'/':' from the start and '.'/':'/'-'
+// from the end of a row. A leading '-' (negative sign) is preserved.
+func trimEdgePunctuation(chars []Char) []Char {
+	for len(chars) > 0 && (chars[0].R == '.' || chars[0].R == ':') {
+		chars = chars[1:]
+	}
+	for len(chars) > 0 {
+		r := chars[len(chars)-1].R
+		if r == '.' || r == ':' || r == '-' {
+			chars = chars[:len(chars)-1]
+			continue
+		}
+		break
+	}
+	return chars
 }
 
 func classRune(class int, names []string) rune {
