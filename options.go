@@ -24,6 +24,10 @@ type Options struct {
 
 	// DebugDir, when set, enables diagnostic image output.
 	DebugDir string
+
+	// SkipPanel bypasses stage-1 panel localization and runs the digit detector
+	// on the image as given (used for diagnostics / pre-cropped inputs).
+	SkipPanel bool
 }
 
 func defaultOptions() Options {
@@ -56,6 +60,10 @@ func WithIOUThreshold(t float64) Option { return func(o *Options) { o.IOUThresho
 
 // WithDebugDir enables diagnostic image output to the given directory.
 func WithDebugDir(dir string) Option { return func(o *Options) { o.DebugDir = dir } }
+
+// WithSkipPanel bypasses stage-1 panel localization (for diagnostics or when the
+// input is already a tight display crop).
+func WithSkipPanel(b bool) Option { return func(o *Options) { o.SkipPanel = b } }
 
 func applyOptions(opts []Option) Options {
 	o := defaultOptions()

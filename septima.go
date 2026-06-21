@@ -49,13 +49,15 @@ func Read(img image.Image, opts ...Option) (Result, error) {
 	panelImg := img
 	offset := image.Point{}
 	region, found := image.Rectangle{}, false
-	if panel, err := detect.OpenModel(modelPath(modelDir, "panel.onnx"), len(classes.PanelClasses), classes.InputSize); err == nil {
+	if o.SkipPanel {
+		// diagnostics / pre-cropped input: run digits on the image as given
+	} else if panel, err := detect.OpenModel(modelPath(modelDir, "panel.onnx"), len(classes.PanelClasses), classes.InputSize); err == nil {
 		defer panel.Close()
 		if dets, derr := panel.Detect(img, o.ConfThreshold, o.IOUThreshold); derr == nil && len(dets) > 0 {
 			region, found = bestDetection(dets).Box, true
 		}
 	}
-	if !found {
+	if !found && !o.SkipPanel {
 		region, found = detect.FindBrightPanel(img)
 	}
 	if found {

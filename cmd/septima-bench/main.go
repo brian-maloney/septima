@@ -7,8 +7,15 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"image"
+	_ "image/jpeg"
+	_ "image/png"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
+
+	_ "golang.org/x/image/webp"
 
 	"github.com/brian-maloney/septima"
 )
@@ -30,6 +37,8 @@ func main() {
 	var (
 		modelDir = flag.String("models", "", "directory containing the ONNX models and classes.json")
 		hinted   = flag.Bool("hinted", false, "pass display_type/rows hints from ground truth")
+		noPanel  = flag.Bool("nopanel", false, "diagnostic: skip panel stage, run digits on the whole image")
+		oracle   = flag.Bool("oracle", false, "diagnostic: crop to the ground-truth digit-box union (perfect localization)")
 	)
 	flag.Parse()
 	if flag.NArg() != 1 {
@@ -71,7 +80,19 @@ func main() {
 			}
 		}
 
-		res, err := septima.ReadFile(path, opts...)
+		var res septima.Result
+		var err error
+		switch {
+		case *oracle:
+			// Crop to the GT digit-box union (perfect localization), then digits.
+			opts = append(opts, septima.WithSkipPanel(true))
+			res, err = readOracle(dir, path, opts)
+		case *noPanel:
+			opts = append(opts, septima.WithSkipPanel(true))
+			res, err = readImage(path, opts)
+		default:
+			res, err = septima.ReadFile(path, opts...)
+		}
 		got := res.Text
 		status := "ok"
 		if err != nil {
@@ -95,6 +116,84 @@ func main() {
 	}
 	fmt.Printf("exact: %d/%d (%.1f%%)   mean char acc: %.1f%%   missing: %d\n",
 		exact, total, 100*float64(exact)/float64(total), 100*charAccSum/float64(total), missing)
+}
+
+func decodeImage(path string) (image.Image, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	img, _, err := image.Decode(f)
+	return img, err
+}
+
+func readImage(path string, opts []septima.Option) (septima.Result, error) {
+	img, err := decodeImage(path)
+	if err != nil {
+		return septima.Result{}, err
+	}
+	return septima.Read(img, opts...)
+}
+
+// readOracle crops to the union of the ground-truth digit boxes (perfect
+// localization) and runs the digit stage on that crop.
+func readOracle(dir, path string, opts []septima.Option) (septima.Result, error) {
+	img, err := decodeImage(path)
+	if err != nil {
+		return septima.Result{}, err
+	}
+	stem := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	box, ok := gtUnionBox(filepath.Join(dir, "labels", stem+".txt"), img.Bounds())
+	if !ok {
+		return septima.Read(img, opts...)
+	}
+	return septima.Read(cropImage(img, box), opts...)
+}
+
+func gtUnionBox(lblPath string, b image.Rectangle) (image.Rectangle, bool) {
+	data, err := os.ReadFile(lblPath)
+	if err != nil {
+		return image.Rectangle{}, false
+	}
+	w, h := float64(b.Dx()), float64(b.Dy())
+	minX, minY, maxX, maxY := 1e18, 1e18, -1e18, -1e18
+	any := false
+	for _, line := range strings.Split(string(data), "\n") {
+		f := strings.Fields(line)
+		if len(f) < 5 {
+			continue
+		}
+		cx, _ := strconv.ParseFloat(f[1], 64)
+		cy, _ := strconv.ParseFloat(f[2], 64)
+		bw, _ := strconv.ParseFloat(f[3], 64)
+		bh, _ := strconv.ParseFloat(f[4], 64)
+		x0, x1 := (cx-bw/2)*w, (cx+bw/2)*w
+		y0, y1 := (cy-bh/2)*h, (cy+bh/2)*h
+		minX, minY = min(minX, x0), min(minY, y0)
+		maxX, maxY = max(maxX, x1), max(maxY, y1)
+		any = true
+	}
+	if !any {
+		return image.Rectangle{}, false
+	}
+	pw, ph := (maxX-minX)*0.10, (maxY-minY)*0.10
+	r := image.Rect(int(minX-pw), int(minY-ph), int(maxX+pw), int(maxY+ph))
+	return r.Intersect(b), true
+}
+
+func cropImage(img image.Image, r image.Rectangle) image.Image {
+	r = r.Intersect(img.Bounds())
+	if r.Empty() {
+		return img
+	}
+	dst := image.NewRGBA(image.Rect(0, 0, r.Dx(), r.Dy()))
+	for y := 0; y < r.Dy(); y++ {
+		for x := 0; x < r.Dx(); x++ {
+			dst.Set(x, y, img.At(r.Min.X+x, r.Min.Y+y))
+		}
+	}
+	return dst
 }
 
 // charAccuracy returns 1 - normalized Levenshtein distance between got and want.
