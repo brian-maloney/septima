@@ -17,16 +17,20 @@
 #   scripts/aws_setup.sh --train   # setup + data prep + train + export
 #
 # Tunables (env vars): SEPTIMA_MODEL, SEPTIMA_DEVICE, SEPTIMA_EPOCHS_PANEL,
-#   SEPTIMA_EPOCHS_DIGITS, SEPTIMA_CUDA (pytorch wheel tag, e.g. cu124).
+#   SEPTIMA_EPOCHS_DIGITS, SEPTIMA_BATCH, SEPTIMA_WORKERS, SEPTIMA_CACHE,
+#   SEPTIMA_CUDA (pytorch wheel tag, e.g. cu124).
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-MODEL="${SEPTIMA_MODEL:-yolo11s.pt}"
+MODEL="${SEPTIMA_MODEL:-yolo11m.pt}"
 DEVICE="${SEPTIMA_DEVICE:-0}"
 EPOCHS_PANEL="${SEPTIMA_EPOCHS_PANEL:-80}"
 EPOCHS_DIGITS="${SEPTIMA_EPOCHS_DIGITS:-120}"
+BATCH="${SEPTIMA_BATCH:-32}"          # L4 (24 GB) fits yolo11m@640 at batch=32; drop to 16 if OOM
+WORKERS="${SEPTIMA_WORKERS:-4}"      # match vCPU count of the instance (g6.xlarge = 4)
+CACHE="${SEPTIMA_CACHE:-ram}"         # ram = fast after epoch 1; disk = safe fallback; False = off
 CUDA_TAG="${SEPTIMA_CUDA:-cu124}"
 DO_TRAIN=0
 [ "${1:-}" = "--train" ] && DO_TRAIN=1
@@ -98,8 +102,8 @@ say "Data ready."
 # --- 5. Train (optional) -----------------------------------------------------
 train_cmds() {
   cat <<EOF
-  python training/train.py --stage panel  --model $MODEL --device $DEVICE --epochs $EPOCHS_PANEL
-  python training/train.py --stage digits --model $MODEL --device $DEVICE --epochs $EPOCHS_DIGITS \\
+  python training/train.py --stage panel  --model $MODEL --device $DEVICE --epochs $EPOCHS_PANEL --batch $BATCH --workers $WORKERS --cache $CACHE
+  python training/train.py --stage digits --model $MODEL --device $DEVICE --epochs $EPOCHS_DIGITS --batch $BATCH --workers $WORKERS --cache $CACHE \\
       --data training/data/data_finetune.yaml
   python training/export_onnx.py --stage panel
   python training/export_onnx.py --stage digits
@@ -107,10 +111,10 @@ EOF
 }
 
 if [ "$DO_TRAIN" -eq 1 ]; then
-  say "Training panel ($MODEL, device $DEVICE, $EPOCHS_PANEL epochs)"
-  python training/train.py --stage panel  --model "$MODEL" --device "$DEVICE" --epochs "$EPOCHS_PANEL"
-  say "Training digits ($MODEL, device $DEVICE, $EPOCHS_DIGITS epochs)"
-  python training/train.py --stage digits --model "$MODEL" --device "$DEVICE" --epochs "$EPOCHS_DIGITS" \
+  say "Training panel ($MODEL, device $DEVICE, $EPOCHS_PANEL epochs, batch $BATCH, workers $WORKERS, cache=$CACHE)"
+  python training/train.py --stage panel  --model "$MODEL" --device "$DEVICE" --epochs "$EPOCHS_PANEL" --batch "$BATCH" --workers "$WORKERS" --cache "$CACHE"
+  say "Training digits ($MODEL, device $DEVICE, $EPOCHS_DIGITS epochs, batch $BATCH, workers $WORKERS, cache=$CACHE)"
+  python training/train.py --stage digits --model "$MODEL" --device "$DEVICE" --epochs "$EPOCHS_DIGITS" --batch "$BATCH" --workers "$WORKERS" --cache "$CACHE" \
       --data training/data/data_finetune.yaml
   python training/export_onnx.py --stage panel
   python training/export_onnx.py --stage digits

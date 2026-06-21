@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Train a YOLO detection stage (digits or panel) with Ultralytics.
 
-Trains YOLO-nano transfer-learned from COCO weights on the merged dataset built
-by prepare.py + render.py. Defaults to Apple Silicon (device=mps).
+Transfer-learns from COCO weights on the merged dataset built by prepare.py +
+render.py.  Defaults to Apple Silicon (device=mps); use --device 0 on CUDA.
 
 Usage:
   python training/train.py --stage digits --epochs 100
   python training/train.py --stage panel  --epochs 60
+  # AWS / L4 (24 GB):
+  python training/train.py --stage digits --model yolo11m.pt --device 0 --batch 32
 
 Results land in training/runs/<stage>/; export the best weights with
 training/export_onnx.py.
@@ -29,12 +31,16 @@ def main():
     ap.add_argument("--data", default=None,
                     help="explicit data yaml (overrides the stage default; use for fine-tuning)")
     ap.add_argument("--model", default="yolo11n.pt",
-                    help="base weights to transfer from (e.g. runs/digits/weights/best.pt to fine-tune)")
+                    help="base weights to transfer from (yolo11n/s/m.pt or runs/…/best.pt to fine-tune)")
     ap.add_argument("--epochs", type=int, default=100)
     ap.add_argument("--imgsz", type=int, default=640)
     ap.add_argument("--batch", type=int, default=16)
     ap.add_argument("--device", default="mps", help="mps | cpu | 0 (cuda)")
     ap.add_argument("--patience", type=int, default=25)
+    ap.add_argument("--cache", default="ram",
+                    help="ultralytics cache mode: ram (fast, needs ~16 GB) | disk | False")
+    ap.add_argument("--workers", type=int, default=8,
+                    help="DataLoader worker processes; set to nCPU on the training host (4 on g6.xlarge)")
     ap.add_argument("--name", default=None, help="run name (default: stage)")
     args = ap.parse_args()
 
@@ -53,11 +59,14 @@ def main():
         project=str(RUNS),
         name=args.name or args.stage,
         exist_ok=True,
-        # Light geometric aug — our synthetic data already varies perspective and
-        # the displays are axis-aligned in use, so avoid heavy rotation/mosaic.
+        cache=args.cache,
+        workers=args.workers,
+        # Light geometric aug — synthetic data already varies perspective;
+        # displays are axis-aligned so no rotation/mosaic (mosaic=0 also avoids
+        # the heavy CPU cost of 4-image stitching per sample).
         degrees=3.0,
         perspective=0.0005,
-        mosaic=0.5,
+        mosaic=0.0,
         fliplr=0.0,   # never mirror: digits are not symmetric
         flipud=0.0,
     )
