@@ -43,13 +43,14 @@ type imageCase struct {
 
 func main() {
 	var (
-		inDir    = flag.String("in", "", "directory with images + ground_truth.json")
-		outDir   = flag.String("out", "training/data/real_tank", "fine-tune dataset root")
-		modelDir = flag.String("models", "models", "dir with digits.onnx + classes.json")
-		conf     = flag.Float64("conf", 0.25, "detection confidence")
-		iou      = flag.Float64("iou", 0.45, "NMS IoU")
-		valFrac  = flag.Float64("val-frac", 0.2, "fraction of matched images held out for val")
-		repeat   = flag.Int("repeat", 6, "oversample factor for matched train images")
+		inDir      = flag.String("in", "", "directory with images + ground_truth.json")
+		outDir     = flag.String("out", "training/data/real_tank", "fine-tune dataset root")
+		modelDir   = flag.String("models", "models", "dir with digits.onnx + classes.json")
+		panelModel = flag.String("panel-model", "", "use this panel.onnx for cropping instead of the bright-panel heuristic (matches the live pipeline)")
+		conf       = flag.Float64("conf", 0.25, "detection confidence")
+		iou        = flag.Float64("iou", 0.45, "NMS IoU")
+		valFrac    = flag.Float64("val-frac", 0.2, "fraction of matched images held out for val")
+		repeat     = flag.Int("repeat", 6, "oversample factor for matched train images")
 	)
 	flag.Parse()
 	if *inDir == "" {
@@ -60,6 +61,13 @@ func main() {
 	classes, err := detect.LoadClasses(*modelDir)
 	must(err)
 	names := classes.DigitClasses
+
+	var panel *detect.Model
+	if *panelModel != "" {
+		panel, err = detect.OpenModel(*panelModel, len(classes.PanelClasses), classes.InputSize)
+		must(err)
+		defer panel.Close()
+	}
 
 	model, err := detect.OpenModel(filepath.Join(*modelDir, "digits.onnx"), len(names), classes.InputSize)
 	must(err)
@@ -86,7 +94,7 @@ func main() {
 			continue
 		}
 
-		crop, dets := detectOnPanel(img, model, *conf, *iou)
+		crop, dets := detectOnPanel(img, panel, model, *conf, *iou)
 		reading := assemble.Assemble(dets, names)
 		stem := "tank_" + strings.TrimSuffix(c.File, filepath.Ext(c.File))
 		labels := yoloLabels(dets, crop.Bounds())
@@ -123,15 +131,34 @@ func main() {
 
 // detectOnPanel mirrors septima.Read's stage-1/stage-2 path and returns the
 // panel crop and the post-processed detections in crop coordinates.
-func detectOnPanel(img image.Image, model *detect.Model, conf, iou float64) (*image.RGBA, []detect.Detection) {
-	region, ok := detect.FindBrightPanel(img)
-	if !ok {
-		region = img.Bounds()
+// If panel is non-nil its detections are used to locate the crop; otherwise
+// the bright-panel heuristic is used.
+func detectOnPanel(img image.Image, panel, digits *detect.Model, conf, iou float64) (*image.RGBA, []detect.Detection) {
+	var region image.Rectangle
+	if panel != nil {
+		dets, err := panel.Detect(img, conf, iou)
+		must(err)
+		if len(dets) > 0 {
+			best := dets[0]
+			for _, d := range dets {
+				if d.Score > best.Score {
+					best = d
+				}
+			}
+			region = best.Box
+		}
+	}
+	if region.Empty() {
+		var ok bool
+		region, ok = detect.FindBrightPanel(img)
+		if !ok {
+			region = img.Bounds()
+		}
 	}
 	region = imageproc.PadRect(region, img.Bounds(), 0.08)
 	crop := imageproc.Crop(img, region)
 
-	dets, err := model.Detect(crop, conf, iou)
+	dets, err := digits.Detect(crop, conf, iou)
 	must(err)
 	dets = detect.DedupeAcrossClasses(dets, 0.5)
 	return crop, dets

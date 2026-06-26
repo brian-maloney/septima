@@ -63,7 +63,7 @@ func Read(img image.Image, opts ...Option) (Result, error) {
 	// Keep whichever candidate the detector is more confident about.
 	if !o.SkipPanel {
 		if region, ok := locatePanel(img, modelDir, classes, o); ok {
-			region = imageproc.PadRect(region, img.Bounds(), 0.08)
+			region = imageproc.PadRect(region, img.Bounds(), 0.30)
 			if cropDets, derr := digits.Detect(imageproc.Crop(img, region), o.ConfThreshold, o.IOUThreshold); derr == nil {
 				for i := range cropDets {
 					cropDets[i].Box = cropDets[i].Box.Add(region.Min)
