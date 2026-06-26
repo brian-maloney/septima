@@ -8,13 +8,20 @@ in the git-ignored `old/`), which proved brittle.
 ## Pipeline
 
 ```
-image ─▶ stage 1: panel detector (YOLO) ─▶ crop + pad ─▶ stage 2: digit detector (YOLO)
-        ─▶ assemble: cluster rows by y, sort left-to-right, map class→char ─▶ Result
+image ─▶ digit detector (YOLO) on full frame ─────────────┐
+    └─▶ panel detector (YOLO) ─▶ crop + pad ─▶ digit detector ─┴─▶ pick higher
+        mean-confidence candidate ─▶ assemble (cluster rows by y, sort L→R,
+        map class→char) ─▶ Result
 ```
 
-- **Stage 1** finds the display panel so the digits aren't lost when a small
-  panel sits in a large frame (e.g. the tank gauge in a 1920×1080 dark photo).
-- **Stage 2** detects each glyph (`0-9 . : -`) within the cropped panel.
+- **Adaptive localization** runs the digit detector twice — once on the full
+  frame and once on a detected-panel crop — and keeps whichever reading has the
+  higher *mean* detection confidence. The crop rescues a small panel in a large
+  frame (e.g. the tank gauge in a 1920×1080 photo); the full frame wins for
+  already-framed displays, where cropping would over-scale the glyphs. Mean (not
+  summed) confidence is used so a candidate can't win by padding its reading with
+  weak phantom detections.
+- **Digit detection** finds each glyph (`0-9 . : -`).
 - **Assembly** groups detections into rows and reads them left-to-right. The tank
   panel's split 4-digit field (`12 | 15` → `1215`) falls out of x-ordering.
 

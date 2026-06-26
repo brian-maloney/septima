@@ -52,7 +52,7 @@ func Read(img image.Image, opts ...Option) (Result, error) {
 	// Adaptive localization. Candidate A: run the digit detector on the full
 	// frame — best when the display already fills the frame, since cropping then
 	// over-scales the glyphs out of the detector's training distribution.
-	dets, err := digits.Detect(img, o.ConfThreshold, o.IOUThreshold)
+	fullDets, err := digits.Detect(img, o.ConfThreshold, o.IOUThreshold)
 	if err != nil {
 		return Result{}, fmt.Errorf("septima: digit detection: %w", err)
 	}
@@ -60,24 +60,39 @@ func Read(img image.Image, opts ...Option) (Result, error) {
 	// Candidate B: localize the panel (trained panel.onnx, else the bright-panel
 	// heuristic) and detect within the crop — best when the display is a small
 	// part of a larger scene (the tank), where full-frame glyphs are too small.
-	// Keep whichever candidate the detector is more confident about.
+	var cropDets []detect.Detection
+	haveCrop := false
 	if !o.SkipPanel {
 		if region, ok := locatePanel(img, modelDir, classes, o); ok {
 			region = imageproc.PadRect(region, img.Bounds(), 0.30)
-			if cropDets, derr := digits.Detect(imageproc.Crop(img, region), o.ConfThreshold, o.IOUThreshold); derr == nil {
-				for i := range cropDets {
-					cropDets[i].Box = cropDets[i].Box.Add(region.Min)
+			if cd, derr := digits.Detect(imageproc.Crop(img, region), o.ConfThreshold, o.IOUThreshold); derr == nil {
+				for i := range cd {
+					cd[i].Box = cd[i].Box.Add(region.Min)
 				}
-				// Keep whichever candidate the detector is more confident about.
-				// A needed crop (tank, where full-frame glyphs are tiny) wins by a
-				// wide margin; an already-framed display favors the full frame.
-				if digitScore(cropDets) > digitScore(dets) {
-					dets = cropDets
-				}
+				cropDets, haveCrop = cd, true
 			}
 		}
 	}
 
+	// Keep whichever candidate the detector is more confident about, by MEAN
+	// detection confidence rather than summed score. A summed score rewards a
+	// candidate that pads its reading with extra weak detections (e.g. full-frame
+	// hallucinating phantom leading digits on the RSA token); the mean penalizes
+	// that dilution, so it picks the cleaner reading. A genuine rescue crop (the
+	// tank, where full-frame glyphs are too small to detect at all) still wins,
+	// since its non-empty detections beat the full frame's near-zero mean.
+	dets := fullDets
+	if haveCrop && meanScore(cropDets) > meanScore(fullDets) {
+		dets = cropDets
+	}
+
+	reading := finalizeReading(dets, classes)
+	return toResult(reading), nil
+}
+
+// finalizeReading applies the shared post-processing pipeline (class-agnostic
+// dedup + colon-dot merge) and assembles the detections into a reading.
+func finalizeReading(dets []detect.Detection, classes detect.Classes) assemble.Reading {
 	// Class-agnostic dedup removes duplicate boxes the per-class NMS misses
 	// (e.g. the same glyph detected as both '9' and '4', or a narrow '1' box
 	// nested in a wider one).
@@ -88,9 +103,7 @@ func Read(img image.Image, opts ...Option) (Result, error) {
 	if dot, col := classIndex(classes.DigitClasses, '.'), classIndex(classes.DigitClasses, ':'); dot >= 0 && col >= 0 {
 		dets = detect.MergeColonDots(dets, dot, col)
 	}
-
-	reading := assemble.Assemble(dets, classes.DigitClasses)
-	return toResult(reading), nil
+	return assemble.Assemble(dets, classes.DigitClasses)
 }
 
 func toResult(r assemble.Reading) Result {
@@ -117,14 +130,24 @@ func locatePanel(img image.Image, modelDir string, classes detect.Classes, o Opt
 	return detect.FindBrightPanel(img)
 }
 
-// digitScore sums detection confidences — used to pick the localization
-// candidate the detector is most confident about.
+// digitScore sums detection confidences.
 func digitScore(dets []detect.Detection) float64 {
 	var s float64
 	for _, d := range dets {
 		s += d.Score
 	}
 	return s
+}
+
+// meanScore is the average detection confidence — the localization-candidate
+// selection signal. Unlike a summed score it does not reward a candidate for
+// padding its reading with extra low-confidence (often phantom) detections. An
+// empty candidate scores 0.
+func meanScore(dets []detect.Detection) float64 {
+	if len(dets) == 0 {
+		return 0
+	}
+	return digitScore(dets) / float64(len(dets))
 }
 
 // classIndex returns the class index whose single-rune label is r, or -1.
