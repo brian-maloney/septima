@@ -15,8 +15,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 
+import yaml
 from PIL import Image
 
 DIGIT_LABELS = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", ".", ":", "-"]
@@ -41,8 +43,27 @@ IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 #     (e.g. price "4.5" + weight "18.74" -> GT "1804451"), so it cannot score a
 #     reader either way. Excluding the whole source (not just its failures) keeps
 #     this a data-quality decision, not cherry-picking.
+#
+#  3. Cross-source dedup: some Roboflow projects are re-exports of the same
+#     underlying images (verified: rf_adikoke and rf_labmonitor_digit_display
+#     share ~28 of 40 images with identical derived GT; a few also recur in
+#     rf_7seg_bhautik). Counting one physical image twice double-weights it, so we
+#     keep a single deterministic copy. The image identity is the original name
+#     left after stripping the dataset prefix and Roboflow's per-export suffix.
+#     Two guards keep this from merging genuinely distinct images that happen to
+#     share a short original name (e.g. unrelated 'lab18' / 'rawimg53' frames):
+#       - a content-hash identity (>=32 hex chars) is trusted on its own; or
+#       - a non-hash identity must recur under a DIFFERENT source AND derive the
+#         SAME reading (this is the adikoke/labmonitor re-export case; it rejects
+#         both intra-source name clashes and same-name/different-reading clashes).
 DEFAULT_MIN_DIGIT_PX = 14.0
 DEFAULT_EXCLUDE_SOURCES = ("loclaurote_price",)
+# Roboflow export suffix: '<originalname>_<ext>.rf.<exporthash>'. The exporthash
+# differs per re-export but <originalname> (usually a content hash) is shared, so
+# stripping this recovers the cross-source image identity.
+_RF_SUFFIX = re.compile(r"_(?:jpg|jpeg|png|bmp|webp)\.rf\.[0-9a-f]+$", re.I)
+# A content-hash identity is a strong same-image signal on its own.
+_HASH_KEY = re.compile(r"[0-9a-f]{32,}$")
 
 
 def read_boxes(lbl: Path):
@@ -101,6 +122,27 @@ def source_of(stem: str, sources: tuple[str, ...]) -> str | None:
     return next((s for s in sources if stem.startswith(s + "_")), None)
 
 
+def load_source_names() -> tuple[str, ...]:
+    """All configured dataset prefixes, longest first. prepare.py names every
+    merged file '<source>_<originalstem>', so matching the longest prefix first
+    correctly strips e.g. 'rf_labmonitor_digit_display' before a shorter source."""
+    data = yaml.safe_load((HERE / "sources.yaml").read_text()) or {}
+    names = [s["name"] for s in data.get("sources", []) if isinstance(s, dict) and "name" in s]
+    return tuple(sorted(names, key=len, reverse=True))
+
+
+def dedup_key(stem: str, source_names: tuple[str, ...]) -> tuple[str, str]:
+    """(image-identity, source) for a merged filename: the source is the dataset
+    prefix it came from, and the identity is the original image name shared across
+    re-exports (strip the source prefix and the Roboflow per-export suffix)."""
+    src = ""
+    for s in source_names:
+        if stem.startswith(s + "_"):
+            src, stem = s, stem[len(s) + 1:]
+            break
+    return _RF_SUFFIX.sub("", stem), src
+
+
 def median_digit_px(boxes, img_h: int) -> float:
     """Median digit-box height in pixels (the readability measure)."""
     hs = sorted(b[4] * img_h for b in boxes)
@@ -121,8 +163,10 @@ def main():
     if not lbl_dir.exists():
         raise SystemExit(f"no held-out test split at {TEST}; run prepare.py first")
 
+    source_names = load_source_names()
+    kept = {}  # image-identity -> list of (source, value) already kept
     images = []
-    dropped = {"no_image": 0, "empty_gt": 0, "excluded_source": 0, "low_res": 0}
+    dropped = {"no_image": 0, "empty_gt": 0, "excluded_source": 0, "low_res": 0, "duplicate": 0}
     drop_src = {}  # excluded-source -> count, for transparency
     for lbl in sorted(lbl_dir.glob("*.txt")):
         img = next((img_dir / (lbl.stem + e) for e in IMG_EXTS if (img_dir / (lbl.stem + e)).exists()), None)
@@ -144,16 +188,27 @@ def main():
         if median_digit_px(boxes, img_h) < args.min_digit_px:
             dropped["low_res"] += 1
             continue
+        # Dedup last: only an image that clears every other gate claims a key, so
+        # a duplicate is never kept over a copy that would otherwise have passed.
+        key, src_name = dedup_key(lbl.stem, source_names)
+        is_hash = bool(_HASH_KEY.fullmatch(key))
+        prior = kept.get(key, ())
+        if any(is_hash or (psrc != src_name and pval == value) for psrc, pval in prior):
+            dropped["duplicate"] += 1
+            continue
+        kept.setdefault(key, []).append((src_name, value))
         images.append({"file": f"images/{img.name}", "value": value})
 
     out = TEST / "ground_truth.json"
     out.write_text(json.dumps({
         "description": "Held-out real-image benchmark (GT strings derived from test-split boxes; "
-                       f"quality-gated: median digit >= {args.min_digit_px:g}px, excluding {list(exclude)})",
+                       f"quality-gated: median digit >= {args.min_digit_px:g}px, excluding {list(exclude)}, "
+                       "cross-source duplicates removed)",
         "images": images,
     }, indent=2))
     print(f"wrote {out} with {len(images)} benchmark images")
     print(f"dropped: {dropped['excluded_source']} excluded-source {drop_src or ''}, "
+          f"{dropped['duplicate']} cross-source duplicate, "
           f"{dropped['low_res']} low-res (<{args.min_digit_px:g}px digits), "
           f"{dropped['empty_gt']} empty-GT, {dropped['no_image']} missing-image")
 
