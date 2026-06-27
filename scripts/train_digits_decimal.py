@@ -70,6 +70,23 @@ def load_digit_classes() -> list[str]:
     return json.loads(CLASSES_JSON.read_text())["digit_classes"]
 
 
+def refresh_finetune_yaml():
+    """Rewrite data_finetune.yaml from the CURRENT data tree (reusing prepare.py's
+    own generator) so it always reflects whether real_tank is present. This closes
+    the stale-yaml footgun that silently dropped the tank hard-negatives last run:
+    once real_tank is scp'd in, the yaml picks it up without re-running prepare.py."""
+    sys.path.insert(0, str(ROOT / "training" / "datasets"))
+    try:
+        import prepare
+    except Exception as e:
+        print(f"{YELLOW}could not import prepare to refresh data_finetune.yaml: {e}{RESET}")
+        return
+    prepare.write_finetune_yaml(DATA, prepare.DIGIT_LABELS)
+    has_rt = (DATA / "real_tank" / "train" / "images").exists()
+    print(f"refreshed {FINETUNE_YAML.relative_to(ROOT)} from data tree "
+          f"(real_tank {'included' if has_rt else 'ABSENT'})")
+
+
 def check_classes(pf: Preflight) -> list[str]:
     if not CLASSES_JSON.exists():
         pf.fail(f"missing {CLASSES_JSON}")
@@ -245,6 +262,8 @@ def main():
         if rc != 0:
             print(f"{RED}render.py failed (rc={rc}); aborting.{RESET}")
             return 2
+
+    refresh_finetune_yaml()
 
     print("\nPreflight checks for digit fine-tune:")
     pf = Preflight()
