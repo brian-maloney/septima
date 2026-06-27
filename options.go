@@ -17,8 +17,15 @@ type Options struct {
 	// ExpectedDigits tells the engine how many digits per row to expect (0 = auto).
 	ExpectedDigits int
 
-	// ConfThreshold is the minimum detector score to keep a detection.
+	// ConfThreshold is the minimum detector score to keep a digit detection.
 	ConfThreshold float64
+	// PunctThreshold is the minimum detector score to keep a punctuation
+	// detection ('.', ':', '-'). It is set lower than ConfThreshold because the
+	// decimal point is the model's weakest, lowest-confidence class: genuine dots
+	// are routinely detected at ~0.18-0.22 and were being dropped by the 0.25
+	// digit floor (e.g. a water-meter "60.00" read as "6000"). The tank stays
+	// phantom-free at this lower bar thanks to its digits-only hard negatives.
+	PunctThreshold float64
 	// IOUThreshold is the IoU cutoff used by non-maximum suppression.
 	IOUThreshold float64
 
@@ -32,8 +39,9 @@ type Options struct {
 
 func defaultOptions() Options {
 	return Options{
-		ConfThreshold: 0.25,
-		IOUThreshold:  0.45,
+		ConfThreshold:  0.25,
+		PunctThreshold: 0.20,
+		IOUThreshold:   0.45,
 	}
 }
 
@@ -52,8 +60,13 @@ func WithExpectedRows(n int) Option { return func(o *Options) { o.ExpectedRows =
 // WithExpectedDigits tells the engine how many digits to expect per row (0 = auto).
 func WithExpectedDigits(n int) Option { return func(o *Options) { o.ExpectedDigits = n } }
 
-// WithConfThreshold sets the minimum detector score to keep a detection.
+// WithConfThreshold sets the minimum detector score to keep a digit detection.
 func WithConfThreshold(t float64) Option { return func(o *Options) { o.ConfThreshold = t } }
+
+// WithPunctThreshold sets the minimum detector score to keep a punctuation
+// detection ('.', ':', '-'). Defaults below ConfThreshold to recover genuine
+// low-confidence decimal points and colons.
+func WithPunctThreshold(t float64) Option { return func(o *Options) { o.PunctThreshold = t } }
 
 // WithIOUThreshold sets the IoU cutoff used by non-maximum suppression.
 func WithIOUThreshold(t float64) Option { return func(o *Options) { o.IOUThreshold = t } }

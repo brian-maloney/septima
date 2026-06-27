@@ -98,12 +98,17 @@ func DedupeAcrossClasses(dets []Detection, iouThreshold float64) []Detection {
 		overlaps := false
 		for _, k := range kept {
 			// Suppress on IoU, or when either box's center sits inside the other
-			// AND the two are of similar height (catches duplicate thin '1' boxes,
-			// including a narrow box nested in a wider one). The height guard keeps
-			// a real decimal/colon — short, and often overlapping a tall neighbor's
-			// box corner — from being mistaken for a duplicate of that digit.
+			// AND the two are either the same class or of similar height (catches
+			// duplicate thin '1' boxes, including a narrow box nested in a wider
+			// one, and two overlapping '.' boxes the detector fires on one dot).
+			// The height guard keeps a real decimal/colon — short, and often
+			// overlapping a tall neighbour digit's box corner — from being mistaken
+			// for a duplicate of that digit; the same-class shortcut doesn't apply
+			// there since digit and punctuation are different classes. A colon's two
+			// dots are vertically offset enough that neither centre is inside the
+			// other, so they survive for MergeColonDots.
 			contained := centerInside(d.Box, k.Box) || centerInside(k.Box, d.Box)
-			if iou(d.Box, k.Box) > iouThreshold || (contained && heightSimilar(d.Box, k.Box)) {
+			if iou(d.Box, k.Box) > iouThreshold || (contained && (d.Class == k.Class || heightSimilar(d.Box, k.Box))) {
 				overlaps = true
 				break
 			}

@@ -83,6 +83,20 @@ func TestDedupeKeepsDecimalOverlappingDigit(t *testing.T) {
 	}
 }
 
+func TestDedupeCollapsesNestedSameClassDots(t *testing.T) {
+	// The detector fires two overlapping '.' boxes on a single decimal point; one
+	// is nested in the other but they differ in height (h=58 vs h=30), so the
+	// height guard alone wouldn't catch them. Same class + containment must still
+	// collapse them to one, or the reading shows a spurious ".." (e.g. "255..01").
+	dets := []Detection{
+		{Class: 10, Score: 0.34, Box: image.Rect(405, 344, 432, 402)}, // '.', h=58
+		{Class: 10, Score: 0.29, Box: image.Rect(410, 354, 427, 384)}, // '.', h=30, nested
+	}
+	if got := DedupeAcrossClasses(dets, 0.5); len(got) != 1 {
+		t.Fatalf("two overlapping same-class dots must collapse to one, got %d", len(got))
+	}
+}
+
 func TestMergeColonDots(t *testing.T) {
 	const dot, colon = 10, 11
 	// Two stacked dots (same x, separated vertically within a digit height) + two

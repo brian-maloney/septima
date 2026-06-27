@@ -9,6 +9,7 @@ import (
 	"image"
 	_ "image/jpeg"
 	_ "image/png"
+	"math"
 	"os"
 	"sort"
 
@@ -49,13 +50,20 @@ func Read(img image.Image, opts ...Option) (Result, error) {
 	}
 	defer digits.Close()
 
+	// Punctuation is detected at a lower confidence bar than digits (see
+	// Options.PunctThreshold), so decode at the lower of the two floors and apply
+	// the real per-class bars afterwards.
+	punct := punctClassSet(classes.DigitClasses)
+	floor := math.Min(o.ConfThreshold, o.PunctThreshold)
+
 	// Adaptive localization. Candidate A: run the digit detector on the full
 	// frame — best when the display already fills the frame, since cropping then
 	// over-scales the glyphs out of the detector's training distribution.
-	fullDets, err := digits.Detect(img, o.ConfThreshold, o.IOUThreshold)
+	rawFull, err := digits.Detect(img, floor, o.IOUThreshold)
 	if err != nil {
 		return Result{}, fmt.Errorf("septima: digit detection: %w", err)
 	}
+	fullDets := applyClassThresholds(rawFull, punct, o.ConfThreshold, o.PunctThreshold)
 
 	// Candidate B: localize the panel (trained panel.onnx, else the bright-panel
 	// heuristic) and detect within the crop — best when the display is a small
@@ -65,11 +73,12 @@ func Read(img image.Image, opts ...Option) (Result, error) {
 	if !o.SkipPanel {
 		if region, ok := locatePanel(img, modelDir, classes, o); ok {
 			region = imageproc.PadRect(region, img.Bounds(), 0.30)
-			if cd, derr := digits.Detect(imageproc.Crop(img, region), o.ConfThreshold, o.IOUThreshold); derr == nil {
+			if cd, derr := digits.Detect(imageproc.Crop(img, region), floor, o.IOUThreshold); derr == nil {
 				for i := range cd {
 					cd[i].Box = cd[i].Box.Add(region.Min)
 				}
-				cropDets, haveCrop = cd, true
+				cropDets = applyClassThresholds(cd, punct, o.ConfThreshold, o.PunctThreshold)
+				haveCrop = true
 			}
 		}
 	}
@@ -148,6 +157,35 @@ func meanScore(dets []detect.Detection) float64 {
 		return 0
 	}
 	return digitScore(dets) / float64(len(dets))
+}
+
+// punctClassSet returns the set of class indices that are punctuation glyphs
+// ('.', ':', '-'), which use the lower PunctThreshold rather than ConfThreshold.
+func punctClassSet(names []string) map[int]bool {
+	m := map[int]bool{}
+	for i, n := range names {
+		if n == "." || n == ":" || n == "-" {
+			m[i] = true
+		}
+	}
+	return m
+}
+
+// applyClassThresholds keeps punctuation detections scoring at least punctT and
+// every other (digit) detection scoring at least digitT. Detection runs at the
+// lower of the two floors, so this is where the real per-class bars are applied.
+func applyClassThresholds(dets []detect.Detection, punct map[int]bool, digitT, punctT float64) []detect.Detection {
+	out := dets[:0:0]
+	for _, d := range dets {
+		thr := digitT
+		if punct[d.Class] {
+			thr = punctT
+		}
+		if d.Score >= thr {
+			out = append(out, d)
+		}
+	}
+	return out
 }
 
 // classIndex returns the class index whose single-rune label is r, or -1.
