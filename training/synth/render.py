@@ -64,19 +64,7 @@ def seg_polys(x0, y0, x1, y1):
     }
 
 
-def _dot(rgb, lab, cx, cy, r, gid, color, square):
-    """Draw one punctuation dot (round or square) into image + label map; return
-    its bbox. Real LCDs vary dot shape/size, so the renderer does too — a single
-    clean circle is what made '.' the weakest, most-missed class."""
-    box = [cx - r, cy - r, cx + r, cy + r]
-    if square:
-        rgb.rectangle(box, fill=color); lab.rectangle(box, fill=gid)
-    else:
-        rgb.ellipse(box, fill=color); lab.ellipse(box, fill=gid)
-    return tuple(box)
-
-
-def draw_glyph(rgb: ImageDraw.ImageDraw, lab: ImageDraw.ImageDraw, char, cell, gid, pal, rng):
+def draw_glyph(rgb: ImageDraw.ImageDraw, lab: ImageDraw.ImageDraw, char, cell, gid, pal):
     """Draw one glyph into the RGB image and the label map; return its YOLO box
     region as drawn-pixel extent (xa,ya,xb,yb), or None to skip."""
     x0, y0, x1, y1 = cell
@@ -103,56 +91,24 @@ def draw_glyph(rgb: ImageDraw.ImageDraw, lab: ImageDraw.ImageDraw, char, cell, g
         xs = [p[0] for p in poly]; ys = [p[1] for p in poly]
         return (min(xs), min(ys), max(xs), max(ys))
 
-    # Punctuation dots: vary size (dot_scale), shape (dot_square), contrast
-    # (dot_color, sometimes fainter than the segments) and position, so the
-    # detector learns '.'/':' robustly instead of memorizing one clean circle.
-    square = pal["dot_square"]
-    dotcol = pal["dot_color"]
     if char == ".":
-        r = 0.16 * w * pal["dot_scale"]
-        cx = x0 + r + rng.uniform(-0.05, 0.10) * w
-        cy = (y1 - r) - rng.uniform(0.0, 0.10) * h   # near the baseline, slight jitter
-        return _dot(rgb, lab, cx, cy, r, gid, dotcol, square)
+        r = 0.16 * w
+        cx, cy = x0 + r, y1 - r
+        box = [cx - r, cy - r, cx + r, cy + r]
+        rgb.ellipse(box, fill=on); lab.ellipse(box, fill=gid)
+        return tuple(box)
 
     if char == ":":
-        r = 0.14 * w * pal["dot_scale"]
-        cx = x0 + w / 2 + rng.uniform(-0.05, 0.05) * w
-        jit = rng.uniform(-0.03, 0.03) * h
+        r = 0.14 * w
+        cx = x0 + w / 2
         out = None
-        for cy in (y0 + h * 0.33 + jit, y0 + h * 0.66 + jit):
-            box = _dot(rgb, lab, cx, cy, r, gid, dotcol, square)
-            out = box if out is None else (min(box[0], out[0]), min(box[1], out[1]),
-                                           max(box[2], out[2]), max(box[3], out[3]))
+        for cy in (y0 + h * 0.33, y0 + h * 0.66):
+            box = [cx - r, cy - r, cx + r, cy + r]
+            rgb.ellipse(box, fill=on); lab.ellipse(box, fill=gid)
+            out = (min(box[0], out[0]) if out else box[0], min(box[1], out[1]) if out else box[1],
+                   max(box[2], out[2]) if out else box[2], max(box[3], out[3]) if out else box[3])
         return out
     return None
-
-
-def scatter_specks(rgb, boxes, pal, rng, W, H, dh):
-    """Sprinkle a few unlabeled dark specks onto an LCD display as hard negatives.
-    Real reflective LCDs carry dust/grime that the detector otherwise reads as
-    phantom decimals (the dominant precision error). Drawn into the image only —
-    never the label map — so they teach 'a small blob is not necessarily a dot'.
-    Specks avoid glyph boxes (with margin) so they don't corrupt a real digit."""
-    if pal["off"] is None or rng.random() > 0.45:   # LCD displays only, ~45%
-        return
-    glyphs = [b[1:] for b in boxes]
-    for _ in range(rng.randint(1, 3)):
-        r = rng.uniform(0.04, 0.10) * dh
-        for _try in range(8):
-            cx = rng.uniform(r, W - r)
-            cy = rng.uniform(r, H - r)
-            m = 0.5 * dh   # keep clear of real glyphs
-            if all(cx < gx0 - m or cx > gx1 + m or cy < gy0 - m or cy > gy1 + m
-                   for gx0, gy0, gx1, gy1 in glyphs):
-                break
-        else:
-            continue
-        col = pal["dot_color"] if rng.random() < 0.6 else pal["on"]
-        box = [cx - r, cy - r, cx + r, cy + r]
-        if pal["dot_square"]:
-            rgb.rectangle(box, fill=col)
-        else:
-            rgb.ellipse(box, fill=col)
 
 
 def cell_width(char, dh):
@@ -168,14 +124,14 @@ def random_text(rng) -> str:
     kind = rng.random()
     n = rng.randint(1, 6)
     digits = "".join(rng.choice("0123456789") for _ in range(n))
-    if kind < 0.40:                     # plain integer (tank-like)
+    if kind < 0.5:                      # plain integer (tank-like)
         return digits
-    if kind < 0.65 and n >= 2:          # decimal (boosted: '.' was the weakest class)
+    if kind < 0.7 and n >= 2:           # decimal
         k = rng.randint(1, max(1, n - 1))
         return digits[:k] + "." + digits[k:]
-    if kind < 0.82 and n >= 3:          # clock-like colon
+    if kind < 0.85 and n >= 3:          # clock-like colon
         return digits[:2] + ":" + digits[2:]
-    if kind < 0.90:                     # negative
+    if kind < 0.92:                     # negative
         return "-" + digits
     return digits
 
@@ -198,32 +154,14 @@ def render_display(text, dh, pal, rng):
     for i, c in enumerate(text):
         cw = widths[i]
         cell = (x, pad, x + cw, pad + dh)
-        region = draw_glyph(drgb, dlab, c, cell, gid=i + 1, pal=pal, rng=rng)
+        region = draw_glyph(drgb, dlab, c, cell, gid=i + 1, pal=pal)
         if region is not None and c in LABEL_INDEX:
             boxes.append((LABEL_INDEX[c], *region))
         x += cw + gap
-    scatter_specks(drgb, boxes, pal, rng, W, H, dh)
     return img, np.array(lab), boxes
 
 
 # ----------------------------------------------------------------------------- palettes & aug
-
-def dot_style(pal, rng):
-    """Add per-display punctuation-dot appearance: shape (round/square), size
-    scale, and contrast. Decided once per display so all dots stay consistent
-    (as on a real device), but varied across displays so '.'/':' generalize."""
-    pal["dot_square"] = rng.random() < 0.4               # ~40% square (LCD-style)
-    pal["dot_scale"] = rng.uniform(0.85, 1.7)            # size variety
-    # Usually the segment colour; sometimes a lower-contrast dot (blend toward bg)
-    # so recall is robust to faint decimals as well as bold ones.
-    on, bg = pal["on"], pal["bg"]
-    if rng.random() < 0.35:
-        f = rng.uniform(0.25, 0.6)
-        pal["dot_color"] = tuple(int(o + f * (b - o)) for o, b in zip(on, bg))
-    else:
-        pal["dot_color"] = on
-    return pal
-
 
 def random_palette(rng):
     if rng.random() < 0.5:
@@ -234,12 +172,12 @@ def random_palette(rng):
         on = (d, d, d + rng.randint(0, 20))
         ghost = rng.random() < 0.7
         off = (base - rng.randint(12, 28),) * 3 if ghost else None
-        return dot_style({"bg": bg, "on": on, "off": off}, rng)
+        return {"bg": bg, "on": on, "off": off}
     # LED: bright segments on dark background, no ghost.
     bg = tuple(rng.randint(0, 35) for _ in range(3))
     hue = rng.choice([(255, 40, 30), (40, 255, 80), (60, 160, 255), (255, 200, 40), (240, 240, 240)])
     on = tuple(min(255, c + rng.randint(-25, 25)) for c in hue)
-    return dot_style({"bg": bg, "on": on, "off": None}, rng)
+    return {"bg": bg, "on": on, "off": None}
 
 
 def find_coeffs(src, dst):
