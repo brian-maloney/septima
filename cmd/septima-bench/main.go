@@ -59,7 +59,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	var exact, total, missing int
+	var exact, digitsExact, total, missing int
 	var charAccSum float64
 	for _, c := range gt.Images {
 		path := filepath.Join(dir, c.File)
@@ -101,11 +101,23 @@ func main() {
 		}
 		ca := charAccuracy(got, c.Value)
 		charAccSum += ca
+		digitsOK := digitsOnly(got) == digitsOnly(c.Value)
+		if digitsOK {
+			digitsExact++
+		}
 		if got == c.Value {
 			exact++
 			fmt.Printf("PASS  %-16s %q\n", c.File, got)
 		} else {
-			fmt.Printf("FAIL  %-16s got %q want %q (char %.0f%%) %s\n", c.File, got, c.Value, ca*100, status)
+			// [digits-ok] flags a failure whose digit sequence is correct and that
+			// differs only in punctuation placement ('.'/':') — often GT-label noise
+			// rather than a recognition error (decimal points are inconsistently
+			// annotated across the source datasets).
+			tag := ""
+			if digitsOK {
+				tag = " [digits-ok]"
+			}
+			fmt.Printf("FAIL  %-16s got %q want %q (char %.0f%%)%s %s\n", c.File, got, c.Value, ca*100, tag, status)
 		}
 	}
 
@@ -116,6 +128,16 @@ func main() {
 	}
 	fmt.Printf("exact: %d/%d (%.1f%%)   mean char acc: %.1f%%   missing: %d\n",
 		exact, total, 100*float64(exact)/float64(total), 100*charAccSum/float64(total), missing)
+	fmt.Printf("digits-only exact: %d/%d (%.1f%%)   <- ignores '.'/':' placement (decimal-label noise)\n",
+		digitsExact, total, 100*float64(digitsExact)/float64(total))
+}
+
+// digitsOnly strips the punctuation whose placement is ambiguously/inconsistently
+// annotated across the source datasets ('.' decimal point and ':' colon), leaving
+// the digit sequence, sign, and row structure. Comparing on this isolates true
+// digit recognition from decimal/colon label noise.
+func digitsOnly(s string) string {
+	return strings.NewReplacer(".", "", ":", "").Replace(s)
 }
 
 func decodeImage(path string) (image.Image, error) {
