@@ -29,6 +29,7 @@ import (
 	"image"
 	_ "image/jpeg"
 	_ "image/png"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -42,10 +43,11 @@ import (
 )
 
 const (
-	confThreshold = 0.25 // matches septima defaultOptions
-	iouThreshold  = 0.45
-	cropPad       = 0.30 // matches septima.Read panel-crop padding
-	smallImgDim   = 400  // min(W,H) below this is tagged small-img
+	confThreshold  = 0.25 // matches septima defaultOptions (digit floor)
+	punctThreshold = 0.20 // matches septima defaultOptions (punctuation floor)
+	iouThreshold   = 0.45
+	cropPad        = 0.30 // matches septima.Read panel-crop padding
+	smallImgDim    = 400  // min(W,H) below this is tagged small-img
 )
 
 type groundTruth struct {
@@ -114,6 +116,11 @@ func main() {
 		defer panel.Close()
 	}
 
+	// Punctuation uses a lower confidence bar than digits, matching septima.Read:
+	// decode at the lower floor, then apply per-class bars before finalize.
+	punctSet := punctClassSet(classes.DigitClasses)
+	floor := math.Min(confThreshold, punctThreshold)
+
 	var recs []record
 	for _, c := range gt.Images {
 		path := filepath.Join(dir, c.File)
@@ -125,17 +132,19 @@ func main() {
 		rec := record{file: c.File, gt: c.Value, w: b.Dx(), h: b.Dy()}
 
 		// Candidate A: full frame.
-		if d, err := digits.Detect(img, confThreshold, iouThreshold); err == nil {
+		if d, err := digits.Detect(img, floor, iouThreshold); err == nil {
+			d = applyClassThresholds(d, punctSet, confThreshold, punctThreshold)
 			rec.full = finalize(d, classes).Text
 			rec.fullMean = meanScore(d)
 		}
 		// Candidate B: panel crop.
 		if region, ok := locatePanel(img, panel, classes); ok {
 			region = imageproc.PadRect(region, b, cropPad)
-			if d, err := digits.Detect(imageproc.Crop(img, region), confThreshold, iouThreshold); err == nil {
+			if d, err := digits.Detect(imageproc.Crop(img, region), floor, iouThreshold); err == nil {
 				for i := range d {
 					d[i].Box = d[i].Box.Add(region.Min)
 				}
+				d = applyClassThresholds(d, punctSet, confThreshold, punctThreshold)
 				rec.crop = finalize(d, classes).Text
 				rec.cropMean = meanScore(d)
 			}
@@ -167,6 +176,33 @@ func locatePanel(img image.Image, panel *detect.Model, classes detect.Classes) (
 		}
 	}
 	return detect.FindBrightPanel(img)
+}
+
+// punctClassSet mirrors septima.punctClassSet.
+func punctClassSet(names []string) map[int]bool {
+	m := map[int]bool{}
+	for i, n := range names {
+		if n == "." || n == ":" || n == "-" {
+			m[i] = true
+		}
+	}
+	return m
+}
+
+// applyClassThresholds mirrors septima.applyClassThresholds: punctuation keeps
+// detections >= punctT, digits >= digitT.
+func applyClassThresholds(dets []detect.Detection, punct map[int]bool, digitT, punctT float64) []detect.Detection {
+	out := dets[:0:0]
+	for _, d := range dets {
+		thr := digitT
+		if punct[d.Class] {
+			thr = punctT
+		}
+		if d.Score >= thr {
+			out = append(out, d)
+		}
+	}
+	return out
 }
 
 func meanScore(dets []detect.Detection) float64 {
