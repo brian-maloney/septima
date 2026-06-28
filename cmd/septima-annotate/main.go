@@ -197,26 +197,49 @@ func writeImage(path string, img image.Image) {
 }
 
 // writeFinetuneYAML writes a data config combining the existing synthetic/public
-// digit training data with the real crops (real oversampled), validating on the
-// held-out real split so the metric tracks real-image accuracy.
+// digit training data with all real_*/train/images datasets present under the
+// same data root (real_tank, real_hard, …). Discovers them by directory scan so
+// adding a new real dataset does not require editing this function.
 func writeFinetuneYAML(outDir string, names []string) {
 	dataRoot, _ := filepath.Abs(filepath.Dir(outDir)) // training/data
-	real := filepath.Base(outDir)                     // real_tank
+
+	// Collect all existing real_*/train/images dirs; also include the current
+	// output dir even if not yet populated.
+	seen := map[string]bool{}
+	var realDirs []string
+	entries, _ := os.ReadDir(dataRoot)
+	for _, e := range entries {
+		if !e.IsDir() || !strings.HasPrefix(e.Name(), "real_") {
+			continue
+		}
+		rel := e.Name() + "/train/images"
+		if _, err := os.Stat(filepath.Join(dataRoot, rel)); err == nil && !seen[rel] {
+			seen[rel] = true
+			realDirs = append(realDirs, rel)
+		}
+	}
+	currentRel := filepath.Base(outDir) + "/train/images"
+	if !seen[currentRel] {
+		realDirs = append(realDirs, currentRel)
+	}
+
+	var trainLines strings.Builder
+	trainLines.WriteString("  - digits/train/images\n")
+	for _, d := range realDirs {
+		fmt.Fprintf(&trainLines, "  - %s\n", d)
+	}
 	var nb strings.Builder
 	for i, n := range names {
 		fmt.Fprintf(&nb, "  %d: %q\n", i, n)
 	}
 	yaml := fmt.Sprintf(`# Fine-tune config: synthetic/public digits + oversampled real crops.
 # Validation uses the synthetic digits val split (always present); the true
-# real-image metric is the Go bench (cmd/septima-bench tanktests).
+# real-image metric is the Go bench (cmd/septima-bench tanktests / tests/).
 path: %s
 train:
-  - digits/train/images
-  - %s/train/images
-val:
-  - digits/val/images
+%sval: digits/val/images
 names:
-%s`, dataRoot, real, nb.String())
+%s`, dataRoot, trainLines.String(), nb.String())
 	must(os.WriteFile(filepath.Join(dataRoot, "data_finetune.yaml"), []byte(yaml), 0o644))
 	fmt.Printf("wrote %s\n", filepath.Join(dataRoot, "data_finetune.yaml"))
 }

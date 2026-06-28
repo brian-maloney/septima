@@ -144,6 +144,12 @@ def check_finetune_yaml(pf: Preflight, digit_classes: list[str]):
     else:
         pf.fail("data_finetune.yaml does NOT include real_tank/train/images — tank will "
                 "regress (phantom decimals). scp real_tank and re-run prepare.py.")
+    if any("real_hard/train/images" in p for p in train):
+        pf.ok("data_finetune.yaml trains on real_hard (tilted/thin-1 hard-negatives present)")
+    else:
+        pf.warn("data_finetune.yaml does not include real_hard/train/images — "
+                "run: go run ./cmd/septima-annotate -in tests -out training/data/real_hard "
+                "-panel-model models/panel.onnx -repeat 30")
 
     # Leakage guard: the held-out test split must never be trained/validated on.
     leak = [p for p in paths if "/test/" in p or p.endswith("/test") or "test/images" in p]
@@ -190,6 +196,14 @@ def check_data_present(pf: Preflight, min_decimal: int, min_colon: int):
         pf.ok(f"real_tank train images: {n_rt}")
     else:
         pf.fail("real_tank/train/images is empty/missing")
+
+    rh = DATA / "real_hard" / "train" / "images"
+    n_rh = sum(1 for p in rh.iterdir() if p.suffix.lower() in IMG_EXTS) if rh.exists() else 0
+    if n_rh > 0:
+        pf.ok(f"real_hard train images: {n_rh} (tilted/thin-1 hard-negatives)")
+    else:
+        pf.warn("real_hard/train/images is empty/missing — run septima-annotate -in tests "
+                "-out training/data/real_hard -panel-model models/panel.onnx -repeat 30")
 
     # The point of this run: decimal + colon synth must be present.
     n_dec = count_class_files(lbl_dir, "synth_*.txt", 10)

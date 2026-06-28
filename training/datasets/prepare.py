@@ -250,12 +250,13 @@ def write_data_yaml(path: Path, root: Path, names: list[str]):
 
 
 def write_finetune_yaml(data_root: Path, names: list[str]):
-    """Digit training config combining the open-source/synthetic digits with the
-    real tank crops when present (real_tank is produced by cmd/septima-annotate
-    and is optional — without it this is just the full digit corpus)."""
+    """Digit training config combining the open-source/synthetic digits with any
+    real_* hard-negative datasets present (produced by cmd/septima-annotate).
+    Discovers all real_*/train/images directories automatically so new datasets
+    (real_tank, real_hard, …) are picked up without editing this function."""
     train = ["digits/train/images"]
-    if (data_root / "real_tank" / "train" / "images").exists():
-        train.append("real_tank/train/images")
+    for real_dir in sorted(data_root.glob("real_*/train/images")):
+        train.append(str(real_dir.relative_to(data_root)))
     (data_root / "data_finetune.yaml").write_text(yaml.safe_dump({
         "path": str(data_root.resolve()),
         "train": train,
