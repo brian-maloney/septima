@@ -143,15 +143,17 @@ def random_text(rng) -> str:
     kind = rng.random()
     n = rng.randint(1, 6)
     digits = "".join(rng.choice("0123456789") for _ in range(n))
-    if kind < 0.42:                     # plain integer (tank-like)
+    if kind < 0.47:                     # plain integer (tank-like)
         return digits
-    if kind < 0.60 and n >= 2:          # decimal
+    if kind < 0.66 and n >= 2:          # decimal
         k = rng.randint(1, max(1, n - 1))
         return digits[:k] + "." + digits[k:]
-    if kind < 0.85 and n >= 3:          # clock-like colon (boosted share; the only
-        # real colon source is one device, so synth carries colon diversity). Vary
-        # the split position and occasionally render HH:MM:SS so ':' is seen in
-        # varied digit contexts, not just a fixed 2-digit prefix.
+    if kind < 0.84 and n >= 3:          # clock-like colon. The only real colon
+        # source is one device, so synth carries colon DIVERSITY (appearance), but
+        # the share is only modestly boosted (~18%, vs 15% baseline): a 40-epoch run
+        # with colon at 25% drifted confidence DOWN on hard tilted real glyphs
+        # (calc/RSA/shell regressed). Vary the split position and occasionally
+        # render HH:MM:SS so ':' is seen in varied digit contexts.
         if n >= 5 and rng.random() < 0.4:           # HH:MM:SS style
             return digits[:n - 4] + ":" + digits[n - 4:n - 2] + ":" + digits[n - 2:]
         k = rng.choice([1, 2, 2, 2, 3]) if n >= 4 else 2

@@ -108,9 +108,12 @@ func finalizeReading(dets []detect.Detection, classes detect.Classes) assemble.R
 	dets = detect.DedupeAcrossClasses(dets, 0.5)
 
 	// A colon is two stacked dots the detector often reports as two decimals —
-	// merge such pairs back into a single ':'.
+	// merge such pairs back into a single ':'. Then drop any stray '.' the
+	// colon-trained model fires inside a ':' box (which would read "2:47" as
+	// "2:.47").
 	if dot, col := classIndex(classes.DigitClasses, '.'), classIndex(classes.DigitClasses, ':'); dot >= 0 && col >= 0 {
 		dets = detect.MergeColonDots(dets, dot, col)
+		dets = detect.SuppressDotsInsideColon(dets, dot, col)
 	}
 	return assemble.Assemble(dets, classes.DigitClasses)
 }

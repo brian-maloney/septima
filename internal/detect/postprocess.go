@@ -163,6 +163,50 @@ func MergeColonDots(dets []Detection, dotClass, colonClass int) []Detection {
 	return out
 }
 
+// SuppressDotsInsideColon removes stray '.' detections that belong to a ':'
+// detection's vertical dot-stack rather than being a real decimal point. A
+// colon-trained model commonly fires an extra '.' on or just above/below a colon
+// (e.g. a reflection or indicator pip), yielding "2:.47". Such a dot is x-aligned
+// with the colon (its center-x lies within the colon's box) and vertically close
+// (within one colon-height above or below). A genuine decimal point sits between
+// digits at a distinct x and on the baseline, so it is never x-aligned with a
+// colon — dropping these is safe and does not touch real decimals (verified
+// against the decimal-bearing benchmark images).
+func SuppressDotsInsideColon(dets []Detection, dotClass, colonClass int) []Detection {
+	var colons []image.Rectangle
+	for _, d := range dets {
+		if d.Class == colonClass {
+			colons = append(colons, d.Box)
+		}
+	}
+	if len(colons) == 0 {
+		return dets
+	}
+	out := dets[:0:0]
+	for _, d := range dets {
+		if d.Class == dotClass && dotInColonStack(d.Box, colons) {
+			continue
+		}
+		out = append(out, d)
+	}
+	return out
+}
+
+// dotInColonStack reports whether a dot box is part of a colon's vertical stack:
+// its center-x falls within a colon box and its center-y is within one
+// colon-height above or below that box.
+func dotInColonStack(dot image.Rectangle, colons []image.Rectangle) bool {
+	cx := (dot.Min.X + dot.Max.X) / 2
+	cy := (dot.Min.Y + dot.Max.Y) / 2
+	for _, c := range colons {
+		ch := c.Dy()
+		if cx >= c.Min.X && cx < c.Max.X && cy >= c.Min.Y-ch && cy < c.Max.Y+ch {
+			return true
+		}
+	}
+	return false
+}
+
 func medianDigitHeight(dets []Detection, dotClass, colonClass int) float64 {
 	var hs []int
 	for _, d := range dets {

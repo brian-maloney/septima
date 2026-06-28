@@ -14,7 +14,7 @@
 #   bash scripts/aws_train_colon.sh --no-regen-synth # use the synth already on the box
 #
 # Tunables (env vars):
-#   SEPTIMA_EPOCHS (40)  SEPTIMA_BATCH (32)  SEPTIMA_DEVICE (0)  SEPTIMA_NAME (digits_colon)
+#   SEPTIMA_EPOCHS (20)  SEPTIMA_BATCH (32)  SEPTIMA_DEVICE (0)  SEPTIMA_NAME (digits_colon)
 #   SEPTIMA_CACHE (ram)  SEPTIMA_DIGITS_SYNTH (8000)  SEPTIMA_PANELS_SYNTH (2500)
 #
 # Footguns this guards against (all have bitten us before):
@@ -30,7 +30,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-EPOCHS="${SEPTIMA_EPOCHS:-40}"
+EPOCHS="${SEPTIMA_EPOCHS:-20}"   # gentler than 40: a long colon-heavy run drifted hard-glyph confidence down
 BATCH="${SEPTIMA_BATCH:-32}"
 DEVICE="${SEPTIMA_DEVICE:-0}"
 NAME="${SEPTIMA_NAME:-digits_colon}"

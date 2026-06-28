@@ -122,6 +122,45 @@ func TestMergeColonDots(t *testing.T) {
 	}
 }
 
+func TestSuppressDotsInsideColon(t *testing.T) {
+	const dot, colon = 10, 11
+	// Alarm-clock geometry: a ':' plus an extra stray dot directly above it (a
+	// reflection/indicator pip, x-aligned) -> the stray dot must be dropped so the
+	// reading is "2:47" not "2:.47". A genuine decimal between later digits and a
+	// decimal in a different row (far in y) must be kept.
+	colonBox := image.Rect(711, 512, 747, 634)
+	dets := []Detection{
+		{Class: 2, Score: 0.9, Box: image.Rect(528, 293, 703, 642)},
+		{Class: colon, Score: 0.7, Box: colonBox},
+		{Class: dot, Score: 0.26, Box: image.Rect(719, 394, 746, 434)},  // stray, above colon, x-aligned -> drop
+		{Class: 4, Score: 0.9, Box: image.Rect(763, 307, 924, 633)},
+		{Class: dot, Score: 0.6, Box: image.Rect(940, 600, 965, 625)},   // real decimal, different x -> keep
+		{Class: dot, Score: 0.6, Box: image.Rect(720, 1100, 745, 1125)}, // another row, far below -> keep
+	}
+	got := SuppressDotsInsideColon(dets, dot, colon)
+	var dots []image.Rectangle
+	colons := 0
+	for _, d := range got {
+		switch d.Class {
+		case dot:
+			dots = append(dots, d.Box)
+		case colon:
+			colons++
+		}
+	}
+	if colons != 1 {
+		t.Fatalf("colon must survive, got %d colons", colons)
+	}
+	if len(dots) != 2 {
+		t.Fatalf("expected 2 dots kept (real decimal + other-row), got %d", len(dots))
+	}
+	for _, b := range dots {
+		if b.Min.Y == 394 {
+			t.Fatalf("stray dot above the colon should have been suppressed")
+		}
+	}
+}
+
 func TestMergeColonDotsKeepsSeparateRowsDecimals(t *testing.T) {
 	const dot, colon = 10, 11
 	// Two decimals a full row apart (different rows of a gas pump) must NOT merge.

@@ -59,7 +59,7 @@ func modelDirOption(t *testing.T) septima.Option {
 // the entry can be removed (see checkKnownHard).
 var knownHard = map[string]string{
 	"images.jpeg": "microwave colon 21:24 under-detected (tiny 259x194 image, no colon signal even at conf 0.03)",
-	"spr-dreamsky-small-digital-alarm-clock-shannon-hansen-day-07-e2a02c3024284199b116f67d4107c28b.jpeg": "alarm-clock colon 2:47 under-detected after real_tank fine-tune",
+	"spr-dreamsky-small-digital-alarm-clock-shannon-hansen-day-07-e2a02c3024284199b116f67d4107c28b.jpeg": "alarm-clock colon 2:47 under-detected by the baseline model (the diverse-colon fine-tune fixes it but is pending a gentler re-run — see scripts/aws_train_colon.sh)",
 }
 
 // checkKnownHard reconciles a result with the knownHard list: it fails when a
