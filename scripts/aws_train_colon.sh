@@ -15,7 +15,7 @@
 #
 # Tunables (env vars):
 #   SEPTIMA_EPOCHS (40)  SEPTIMA_BATCH (32)  SEPTIMA_DEVICE (0)  SEPTIMA_NAME (digits_colon)
-#   SEPTIMA_DIGITS_SYNTH (8000)  SEPTIMA_PANELS_SYNTH (2500)
+#   SEPTIMA_CACHE (ram)  SEPTIMA_DIGITS_SYNTH (8000)  SEPTIMA_PANELS_SYNTH (2500)
 #
 # Footguns this guards against (all have bitten us before):
 #   - training fresh from stock yolo11m.pt instead of best.pt  -> broad regression
@@ -34,6 +34,7 @@ EPOCHS="${SEPTIMA_EPOCHS:-40}"
 BATCH="${SEPTIMA_BATCH:-32}"
 DEVICE="${SEPTIMA_DEVICE:-0}"
 NAME="${SEPTIMA_NAME:-digits_colon}"
+CACHE="${SEPTIMA_CACHE:-ram}"   # ram = fast after epoch 1 (needs ~25 GB system RAM); disk = safe; False = off
 DIGITS_SYNTH="${SEPTIMA_DIGITS_SYNTH:-8000}"
 PANELS_SYNTH="${SEPTIMA_PANELS_SYNTH:-2500}"
 REGEN_SYNTH=1
@@ -154,8 +155,8 @@ fi
 # train_digits_decimal.py re-runs the FULL data preflight (refreshes
 # data_finetune.yaml from the tree, asserts the 13-class base, real_tank present,
 # no test-split leakage, colon/decimal synth present, device available).
-say "Fine-tuning digits from best.pt (device ${DEVICE}, ${EPOCHS} epochs, batch ${BATCH}, name ${NAME})"
-python scripts/train_digits_decimal.py --device "$DEVICE" --epochs "$EPOCHS" --batch "$BATCH" --name "$NAME"
+say "Fine-tuning digits from best.pt (device ${DEVICE}, ${EPOCHS} epochs, batch ${BATCH}, cache ${CACHE}, name ${NAME})"
+python scripts/train_digits_decimal.py --device "$DEVICE" --epochs "$EPOCHS" --batch "$BATCH" --cache "$CACHE" --name "$NAME"
 
 # 12. export to models/digits.onnx --------------------------------------------
 say "Exporting ONNX -> models/digits.onnx"
