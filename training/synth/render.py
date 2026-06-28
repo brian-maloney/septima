@@ -64,7 +64,7 @@ def seg_polys(x0, y0, x1, y1):
     }
 
 
-def draw_glyph(rgb: ImageDraw.ImageDraw, lab: ImageDraw.ImageDraw, char, cell, gid, pal):
+def draw_glyph(rgb: ImageDraw.ImageDraw, lab: ImageDraw.ImageDraw, char, cell, gid, pal, rng=None):
     """Draw one glyph into the RGB image and the label map; return its YOLO box
     region as drawn-pixel extent (xa,ya,xb,yb), or None to skip."""
     x0, y0, x1, y1 = cell
@@ -99,12 +99,31 @@ def draw_glyph(rgb: ImageDraw.ImageDraw, lab: ImageDraw.ImageDraw, char, cell, g
         return tuple(box)
 
     if char == ":":
-        r = 0.14 * w
-        cx = x0 + w / 2
+        # Diversify colon appearance so the detector learns ':' as a shape class
+        # rather than memorizing the single washing-machine style in the only real
+        # colon source (rf_tmnsi_colon). Vary dot radius, the two dots' vertical
+        # positions (keeping a clear gap), dot shape (round vs square), and a small
+        # shared horizontal jitter. The whole colon is one box / one gid -> the ':'
+        # class, matching how the real colon set labels it.
+        if rng is None:
+            r_top = r_bot = 0.14 * w
+            ty, by = y0 + h * 0.33, y0 + h * 0.66
+            cx = x0 + w / 2
+            square = False
+        else:
+            r_top = rng.uniform(0.10, 0.20) * w
+            r_bot = r_top * rng.uniform(0.85, 1.15)
+            ty = y0 + h * rng.uniform(0.24, 0.38)
+            by = y0 + h * rng.uniform(0.62, 0.76)
+            cx = x0 + w / 2 + rng.uniform(-0.06, 0.06) * w
+            square = rng.random() < 0.30
         out = None
-        for cy in (y0 + h * 0.33, y0 + h * 0.66):
+        for cy, r in ((ty, r_top), (by, r_bot)):
             box = [cx - r, cy - r, cx + r, cy + r]
-            rgb.ellipse(box, fill=on); lab.ellipse(box, fill=gid)
+            if square:
+                rgb.rectangle(box, fill=on); lab.rectangle(box, fill=gid)
+            else:
+                rgb.ellipse(box, fill=on); lab.ellipse(box, fill=gid)
             out = (min(box[0], out[0]) if out else box[0], min(box[1], out[1]) if out else box[1],
                    max(box[2], out[2]) if out else box[2], max(box[3], out[3]) if out else box[3])
         return out
@@ -124,13 +143,20 @@ def random_text(rng) -> str:
     kind = rng.random()
     n = rng.randint(1, 6)
     digits = "".join(rng.choice("0123456789") for _ in range(n))
-    if kind < 0.5:                      # plain integer (tank-like)
+    if kind < 0.42:                     # plain integer (tank-like)
         return digits
-    if kind < 0.7 and n >= 2:           # decimal
+    if kind < 0.60 and n >= 2:          # decimal
         k = rng.randint(1, max(1, n - 1))
         return digits[:k] + "." + digits[k:]
-    if kind < 0.85 and n >= 3:          # clock-like colon
-        return digits[:2] + ":" + digits[2:]
+    if kind < 0.85 and n >= 3:          # clock-like colon (boosted share; the only
+        # real colon source is one device, so synth carries colon diversity). Vary
+        # the split position and occasionally render HH:MM:SS so ':' is seen in
+        # varied digit contexts, not just a fixed 2-digit prefix.
+        if n >= 5 and rng.random() < 0.4:           # HH:MM:SS style
+            return digits[:n - 4] + ":" + digits[n - 4:n - 2] + ":" + digits[n - 2:]
+        k = rng.choice([1, 2, 2, 2, 3]) if n >= 4 else 2
+        k = min(k, n - 1)
+        return digits[:k] + ":" + digits[k:]
     if kind < 0.92:                     # negative
         return "-" + digits
     return digits
@@ -154,7 +180,7 @@ def render_display(text, dh, pal, rng):
     for i, c in enumerate(text):
         cw = widths[i]
         cell = (x, pad, x + cw, pad + dh)
-        region = draw_glyph(drgb, dlab, c, cell, gid=i + 1, pal=pal)
+        region = draw_glyph(drgb, dlab, c, cell, gid=i + 1, pal=pal, rng=rng)
         if region is not None and c in LABEL_INDEX:
             boxes.append((LABEL_INDEX[c], *region))
         x += cw + gap

@@ -206,15 +206,16 @@ def check_data_present(pf: Preflight, min_decimal: int, min_colon: int):
 
 
 def check_render_code(pf: Preflight):
-    """Soft check that render.py is the updated generator."""
+    """Soft check that render.py carries the diverse-colon generator (the targeted
+    colon-synthesis change), so the run actually adds the new colon variety."""
     if not RENDER_PY.exists():
         pf.warn("render.py not found (cannot confirm generator version)")
         return
     src = RENDER_PY.read_text()
-    if "scatter_specks" in src and "dot_style" in src:
-        pf.ok("render.py is the updated decimal generator (dot_style + scatter_specks)")
+    if "Diversify colon appearance" in src and "square" in src:
+        pf.ok("render.py is the diverse-colon generator (varied dot size/position/shape)")
     else:
-        pf.warn("render.py lacks dot_style/scatter_specks — synth may be the OLD generator")
+        pf.warn("render.py lacks the diverse-colon code — synth may be the OLD generator")
 
 
 def check_device(pf: Preflight, device: str, allow_cpu: bool):
