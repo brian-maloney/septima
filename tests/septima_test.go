@@ -58,9 +58,8 @@ func modelDirOption(t *testing.T) septima.Option {
 // documenting the open limitations; a case that starts passing fails loudly so
 // the entry can be removed (see checkKnownHard).
 var knownHard = map[string]string{
-	"images.jpeg": "microwave colon 21:24 under-detected (tiny 259x194 image)",
+	"images.jpeg": "microwave colon 21:24 under-detected (tiny 259x194 image, no colon signal even at conf 0.03)",
 	"spr-dreamsky-small-digital-alarm-clock-shannon-hansen-day-07-e2a02c3024284199b116f67d4107c28b.jpeg": "alarm-clock colon 2:47 under-detected after real_tank fine-tune",
-	"jai5qyznvjky.jpg": "Shell pump 3024x4032: bottom-row leading '1' under-detected",
 }
 
 // checkKnownHard reconciles a result with the knownHard list: it fails when a
