@@ -15,7 +15,7 @@
 #
 # Tunables (env vars):
 #   SEPTIMA_EPOCHS (20)  SEPTIMA_BATCH (32)  SEPTIMA_DEVICE (0)  SEPTIMA_NAME (digits_colon)
-#   SEPTIMA_CACHE (ram)  SEPTIMA_DIGITS_SYNTH (8000)  SEPTIMA_PANELS_SYNTH (2500)
+#   SEPTIMA_CACHE (ram)  SEPTIMA_FREEZE (11)  SEPTIMA_DIGITS_SYNTH (8000)  SEPTIMA_PANELS_SYNTH (2500)
 #
 # Footguns this guards against (all have bitten us before):
 #   - training fresh from stock yolo11m.pt instead of best.pt  -> broad regression
@@ -35,6 +35,9 @@ BATCH="${SEPTIMA_BATCH:-32}"
 DEVICE="${SEPTIMA_DEVICE:-0}"
 NAME="${SEPTIMA_NAME:-digits_colon}"
 CACHE="${SEPTIMA_CACHE:-ram}"   # ram = fast after epoch 1 (needs ~25 GB system RAM); disk = safe; False = off
+FREEZE="${SEPTIMA_FREEZE:-11}"  # freeze the YOLO11 backbone (layers 0-10) so the fine-tune adapts only
+                                # the neck/head to colons -> preserves thin-'1'/digit features that a full
+                                # fine-tune drifted. Set SEPTIMA_FREEZE=0 (or empty) to fine-tune all layers.
 DIGITS_SYNTH="${SEPTIMA_DIGITS_SYNTH:-8000}"
 PANELS_SYNTH="${SEPTIMA_PANELS_SYNTH:-2500}"
 REGEN_SYNTH=1
@@ -155,8 +158,10 @@ fi
 # train_digits_decimal.py re-runs the FULL data preflight (refreshes
 # data_finetune.yaml from the tree, asserts the 13-class base, real_tank present,
 # no test-split leakage, colon/decimal synth present, device available).
-say "Fine-tuning digits from best.pt (device ${DEVICE}, ${EPOCHS} epochs, batch ${BATCH}, cache ${CACHE}, name ${NAME})"
-python scripts/train_digits_decimal.py --device "$DEVICE" --epochs "$EPOCHS" --batch "$BATCH" --cache "$CACHE" --name "$NAME"
+FREEZE_ARG=()
+if [ -n "$FREEZE" ] && [ "$FREEZE" != "0" ]; then FREEZE_ARG=(--freeze "$FREEZE"); fi
+say "Fine-tuning digits from best.pt (device ${DEVICE}, ${EPOCHS} epochs, batch ${BATCH}, cache ${CACHE}, freeze ${FREEZE:-none}, name ${NAME})"
+python scripts/train_digits_decimal.py --device "$DEVICE" --epochs "$EPOCHS" --batch "$BATCH" --cache "$CACHE" "${FREEZE_ARG[@]}" --name "$NAME"
 
 # 12. export to models/digits.onnx --------------------------------------------
 say "Exporting ONNX -> models/digits.onnx"

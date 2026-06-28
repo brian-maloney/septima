@@ -42,6 +42,10 @@ def main():
     ap.add_argument("--workers", type=int, default=8,
                     help="DataLoader worker processes; set to nCPU on the training host (4 on g6.xlarge)")
     ap.add_argument("--name", default=None, help="run name (default: stage)")
+    ap.add_argument("--freeze", type=int, default=None,
+                    help="freeze the first N layers (e.g. 11 = the YOLO11 backbone) so a "
+                         "fine-tune adapts only the neck/head — preserves digit features when "
+                         "adding a new glyph style like colons")
     args = ap.parse_args()
 
     data_yaml = Path(args.data) if args.data else DATA / args.stage / f"data_{args.stage}.yaml"
@@ -61,6 +65,7 @@ def main():
         exist_ok=True,
         cache=args.cache,
         workers=args.workers,
+        freeze=args.freeze,
         # Light geometric aug — synthetic data already varies perspective;
         # displays are axis-aligned so no rotation/mosaic (mosaic=0 also avoids
         # the heavy CPU cost of 4-image stitching per sample).

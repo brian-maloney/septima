@@ -250,6 +250,9 @@ def main():
     ap.add_argument("--name", default="digits_decimal")
     ap.add_argument("--min-decimal", type=int, default=300, help="min synth files with a '.' box")
     ap.add_argument("--min-colon", type=int, default=120, help="min synth files with a ':' box")
+    ap.add_argument("--freeze", type=int, default=None,
+                    help="freeze the first N layers (e.g. 11 = YOLO11 backbone) so the "
+                         "fine-tune adapts only the neck/head (preserves digit features)")
     ap.add_argument("--regen-synth", action="store_true",
                     help="regenerate synth (4000/1500) before validating")
     ap.add_argument("--allow-cpu", action="store_true")
@@ -293,6 +296,8 @@ def main():
            "--device", args.device,
            "--cache", args.cache,
            "--name", args.name]
+    if args.freeze is not None:
+        cmd += ["--freeze", str(args.freeze)]
     print(f"{GREEN}All critical checks passed.{RESET}")
     print("Training command:\n  " + " ".join(cmd))
     if args.dry_run:
