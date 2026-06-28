@@ -88,8 +88,12 @@ else
 fi
 
 # 4. disk space (synth + ultralytics cache + run artifacts) -------------------
-FREE_GB="$(df -P . | awk 'NR==2{print int($4/1024/1024)}')"
-if [ "${FREE_GB:-0}" -ge 25 ]; then ok "disk free: ${FREE_GB} GB"; else warn "only ${FREE_GB:-?} GB free — the image cache may not fit (consider SEPTIMA_CACHE=disk or False in train)"; fi
+# A network FS (EFS) reports an effectively-unbounded size; show "ample" instead
+# of the overflowed number.
+FREE_GB="$(df -P . | awk 'NR==2{print int($4/1024/1024)}')" || true
+if [ "${FREE_GB:-0}" -ge 1000000 ]; then ok "disk free: ample (network FS)"; \
+  elif [ "${FREE_GB:-0}" -ge 25 ]; then ok "disk free: ${FREE_GB} GB"; \
+  else warn "only ${FREE_GB:-?} GB free — the image cache may not fit (consider SEPTIMA_CACHE=disk or False)"; fi
 
 # 5. code freshness: render.py MUST be the diverse-colon generator ------------
 grep -q "Diversify colon appearance" training/synth/render.py \
@@ -110,12 +114,14 @@ BASE="training/runs/digits/weights/best.pt"
 ok "base weights present: $BASE"
 
 # 8. real (non-synth) digit data prepared -------------------------------------
+# NB: no `find | head` here — under `set -o pipefail`, head closing the pipe early
+# sends find SIGPIPE (exit 141) and silently kills the script. Count everything.
 N_REAL="$(find training/data/digits/train/images -type f \
           \( -name '*.jpg' -o -name '*.jpeg' -o -name '*.png' -o -name '*.webp' \) \
-          ! -name 'synth_*' 2>/dev/null | head -200 | wc -l | tr -d ' ')"
+          ! -name 'synth_*' 2>/dev/null | wc -l | tr -d ' ')" || true
 [ "${N_REAL:-0}" -ge 100 ] \
-  || die "training/data/digits/train has no real images — run training/datasets/prepare.py first (needs ROBOFLOW_API_KEY + ~/.kaggle/kaggle.json)"
-ok "real digit data present (>=${N_REAL} real train images)"
+  || die "training/data/digits/train has only ${N_REAL:-0} real images — run training/datasets/prepare.py first (needs ROBOFLOW_API_KEY + ~/.kaggle/kaggle.json)"
+ok "real digit data present (${N_REAL} real train images)"
 
 # 9. real_tank present (holds tank 32/32) -------------------------------------
 [ -n "$(ls -A training/data/real_tank/train/images 2>/dev/null || true)" ] \
@@ -131,8 +137,10 @@ if [ "$REGEN_SYNTH" -eq 1 ]; then
   python training/synth/render.py --digits "$DIGITS_SYNTH" --panels "$PANELS_SYNTH"
   # Invalidate ultralytics' cached file lists so the new synth is actually used.
   find training/data -name 'labels.cache' -delete 2>/dev/null || true
-  N_COL="$(grep -l '^11 ' training/data/digits/train/labels/synth_*.txt 2>/dev/null | wc -l | tr -d ' ')"
-  ok "synth regenerated; train files with a colon ':' box: ${N_COL}"
+  # `|| true`: grep -l exits 1 when it matches nothing, which pipefail would turn
+  # into a script-killing failure.
+  N_COL="$(grep -l '^11 ' training/data/digits/train/labels/synth_*.txt 2>/dev/null | wc -l | tr -d ' ')" || true
+  ok "synth regenerated; train files with a colon ':' box: ${N_COL:-0}"
 else
   warn "--no-regen-synth: using the synth already on the box (ensure it is the diverse-colon synth)"
 fi
