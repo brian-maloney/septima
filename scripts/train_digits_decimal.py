@@ -257,7 +257,8 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--base", type=Path, default=DEFAULT_BASE,
                     help="base weights to fine-tune (must be the 13-class digit model)")
-    ap.add_argument("--device", default="mps", help="mps | cpu | 0 (cuda)")
+    ap.add_argument("--device", default=None,
+                    help="mps | cpu | 0 (cuda); auto-detected when omitted")
     ap.add_argument("--epochs", type=int, default=40)
     ap.add_argument("--batch", type=int, default=16)
     ap.add_argument("--cache", default="disk", help="ram | disk | False")
@@ -272,6 +273,19 @@ def main():
     ap.add_argument("--allow-cpu", action="store_true")
     ap.add_argument("--dry-run", action="store_true", help="validate only; do not train")
     args = ap.parse_args()
+
+    if args.device is None:
+        try:
+            import torch
+            if torch.cuda.is_available():
+                args.device = "0"
+            elif torch.backends.mps.is_available():
+                args.device = "mps"
+            else:
+                args.device = "cpu"
+        except ImportError:
+            args.device = "cpu"
+        print(f"auto-detected device: {args.device}")
 
     if args.regen_synth:
         print("Regenerating synthetic data (4000 digit / 1500 panel) ...")
