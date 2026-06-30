@@ -13,11 +13,13 @@
 # Prerequisites (on the AWS box):
 #   1. Code synced (no git remote; use scp/rsync from local machine).
 #   2. training/data/real_tank present (rsync from local).
-#   3. training/data/real_hard present (rsync from local after running:
-#        go run ./cmd/septima-annotate -in tests \
-#          -out training/data/real_hard \
-#          -panel-model models/panel.onnx \
-#          -repeat 30
+#   3. training/data/real_hard present (rsync the WHOLE dir from local after
+#      staging it with the reproducible producer:
+#        python scripts/stage_real_hard.py     # 5 digit cases x60, incl shell pump
+#      review/ holds the canonical labelled crops (incl the hand-fixed shell-pump
+#      bottom-row decimal, 13.318); stage_real_hard.py crops the full shell photo
+#      to its panel + oversamples every case into train/.  This REPLACES the old
+#      `septima-annotate -repeat 30` step.  rsync review/ + train/ to the box.
 #   4. training/runs/digits/weights/best.pt present (the 13-class yolo11m baseline).
 #   5. Python venv built (scripts/aws_setup.sh).
 #
@@ -27,7 +29,9 @@
 #   bash scripts/aws_train_combined.sh --no-regen-synth # skip synth regen (use box's copy)
 #
 # Tunables (env vars):
-#   SEPTIMA_EPOCHS   (20)    epochs — same as the "gentler" run; full backbone, less is safer
+#   SEPTIMA_EPOCHS   (30)    epochs — longer than the 20ep combined run so the
+#                            stronger (x60) hard-negatives can fully counter the
+#                            colon-synth digit drift; override lower if it over-trades
 #   SEPTIMA_BATCH    (32)
 #   SEPTIMA_DEVICE   (0)
 #   SEPTIMA_NAME     (digits_combined)
@@ -43,7 +47,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-EPOCHS="${SEPTIMA_EPOCHS:-20}"
+EPOCHS="${SEPTIMA_EPOCHS:-30}"
 BATCH="${SEPTIMA_BATCH:-32}"
 DEVICE="${SEPTIMA_DEVICE:-0}"
 NAME="${SEPTIMA_NAME:-digits_combined}"
@@ -148,14 +152,14 @@ N_HARD="$(find training/data/real_hard/train/images -type f \
 if [ "${N_HARD:-0}" -ge 10 ]; then
   ok "real_hard present (${N_HARD} train images)"
 else
-  die "training/data/real_hard is empty or missing — generate it locally first:
-    go run ./cmd/septima-annotate \\
-      -in tests \\
-      -out training/data/real_hard \\
-      -panel-model models/panel.onnx \\
-      -repeat 30
-  then rsync to this box:
+  die "training/data/real_hard is empty or missing — stage it locally first:
+    python scripts/stage_real_hard.py
+  then rsync the whole dir to this box:
     rsync -av training/data/real_hard <aws-host>:~/septima/training/data/"
+fi
+EXPECT_HARD=300  # 5 cases x60 from stage_real_hard.py
+if [ "${N_HARD:-0}" -lt 250 ]; then
+  warn "real_hard has ${N_HARD} imgs (<${EXPECT_HARD}); did you stage the shell pump at x60? (stage_real_hard.py)"
 fi
 
 # 11. regenerate colon-diverse synth ON this box --------------------------------
