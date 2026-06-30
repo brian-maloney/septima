@@ -53,9 +53,19 @@ IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 #     Two guards keep this from merging genuinely distinct images that happen to
 #     share a short original name (e.g. unrelated 'lab18' / 'rawimg53' frames):
 #       - a content-hash identity (>=32 hex chars) is trusted on its own; or
-#       - a non-hash identity must recur under a DIFFERENT source AND derive the
-#         SAME reading (this is the adikoke/labmonitor re-export case; it rejects
-#         both intra-source name clashes and same-name/different-reading clashes).
+#       - a non-hash identity must recur deriving the SAME reading. Requiring an
+#         identical reading is what makes this safe against same-name/different-
+#         image clashes (e.g. unrelated 'lab18' frames read differently, so they
+#         are not merged); when two same-named images DO read identically the
+#         merge is harmless (same benchmark outcome). This covers both the
+#         adikoke/labmonitor cross-source re-exports and intra-source Roboflow
+#         re-exports of one image (rawimg53, lab18, download-4 all recur with the
+#         same label within rf_digitfinder).
+#
+#  4. Malformed-GT gate: drop images whose box-derived reading contains doubled
+#     punctuation ('..' or '::'). No real display shows two adjacent decimal
+#     points/colons; these come from overlapping or stray punctuation boxes (e.g.
+#     '6..21390', '00..06') and cannot be matched by any correct reader.
 DEFAULT_MIN_DIGIT_PX = 14.0
 DEFAULT_EXCLUDE_SOURCES = ("loclaurote_price",)
 # Roboflow export suffix: '<originalname>_<ext>.rf.<exporthash>'. The exporthash
@@ -166,7 +176,7 @@ def main():
     source_names = load_source_names()
     kept = {}  # image-identity -> list of (source, value) already kept
     images = []
-    dropped = {"no_image": 0, "empty_gt": 0, "excluded_source": 0, "low_res": 0, "duplicate": 0}
+    dropped = {"no_image": 0, "empty_gt": 0, "malformed_gt": 0, "excluded_source": 0, "low_res": 0, "duplicate": 0}
     drop_src = {}  # excluded-source -> count, for transparency
     for lbl in sorted(lbl_dir.glob("*.txt")):
         img = next((img_dir / (lbl.stem + e) for e in IMG_EXTS if (img_dir / (lbl.stem + e)).exists()), None)
@@ -183,6 +193,9 @@ def main():
         if not value:
             dropped["empty_gt"] += 1
             continue
+        if re.search(r"[.:]{2,}", value):  # doubled punctuation = stray/overlapping boxes
+            dropped["malformed_gt"] += 1
+            continue
         with Image.open(img) as im:
             _, img_h = im.size
         med_px = median_digit_px(boxes, img_h)
@@ -194,7 +207,7 @@ def main():
         key, src_name = dedup_key(lbl.stem, source_names)
         is_hash = bool(_HASH_KEY.fullmatch(key))
         prior = kept.get(key, ())
-        if any(is_hash or (psrc != src_name and pval == value) for psrc, pval in prior):
+        if any(is_hash or pval == value for _, pval in prior):
             dropped["duplicate"] += 1
             continue
         kept.setdefault(key, []).append((src_name, value))
@@ -214,8 +227,9 @@ def main():
     }, indent=2))
     print(f"wrote {out} with {len(images)} benchmark images")
     print(f"dropped: {dropped['excluded_source']} excluded-source {drop_src or ''}, "
-          f"{dropped['duplicate']} cross-source duplicate, "
+          f"{dropped['duplicate']} duplicate, "
           f"{dropped['low_res']} low-res (<{args.min_digit_px:g}px digits), "
+          f"{dropped['malformed_gt']} malformed-GT, "
           f"{dropped['empty_gt']} empty-GT, {dropped['no_image']} missing-image")
 
 
