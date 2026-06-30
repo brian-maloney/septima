@@ -185,7 +185,8 @@ def main():
             continue
         with Image.open(img) as im:
             _, img_h = im.size
-        if median_digit_px(boxes, img_h) < args.min_digit_px:
+        med_px = median_digit_px(boxes, img_h)
+        if med_px < args.min_digit_px:
             dropped["low_res"] += 1
             continue
         # Dedup last: only an image that clears every other gate claims a key, so
@@ -197,7 +198,12 @@ def main():
             dropped["duplicate"] += 1
             continue
         kept.setdefault(key, []).append((src_name, value))
-        images.append({"file": f"images/{img.name}", "value": value})
+        images.append({
+            "file": f"images/{img.name}",
+            "value": value,
+            "source": src_name,
+            "median_px": round(med_px, 1),
+        })
 
     out = TEST / "ground_truth.json"
     out.write_text(json.dumps({

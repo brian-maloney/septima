@@ -12,6 +12,7 @@ import (
 	_ "image/png"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -31,6 +32,13 @@ type imageCase struct {
 	DisplayType string   `json:"display_type"`
 	Rows        []string `json:"rows"`
 	Notes       string   `json:"notes"`
+	Source      string   `json:"source"`
+	MedianPx    float64  `json:"median_px"`
+}
+
+// srcStat accumulates per-source pass/fail counts for the breakdown table.
+type srcStat struct {
+	total, exact, digitsExact int
 }
 
 func main() {
@@ -61,6 +69,14 @@ func main() {
 
 	var exact, digitsExact, total, missing int
 	var charAccSum float64
+	bySource := map[string]*srcStat{}
+	var srcOrder []string
+	// Resolution buckets: small crops (median digit < smallPx tall) are at/near the
+	// detector's resolution floor, so their failures are largely benchmark
+	// contamination rather than model deficiency. Splitting them out shows the
+	// recognition rate on genuinely readable displays.
+	const smallPx = 30
+	var readable, small srcStat
 	for _, c := range gt.Images {
 		path := filepath.Join(dir, c.File)
 		if _, err := os.Stat(path); os.IsNotExist(err) {
@@ -105,6 +121,34 @@ func main() {
 		if digitsOK {
 			digitsExact++
 		}
+		src := c.Source
+		if src == "" {
+			src = "(unknown)"
+		}
+		st := bySource[src]
+		if st == nil {
+			st = &srcStat{}
+			bySource[src] = st
+			srcOrder = append(srcOrder, src)
+		}
+		st.total++
+		if digitsOK {
+			st.digitsExact++
+		}
+		if got == c.Value {
+			st.exact++
+		}
+		bucket := &readable
+		if c.MedianPx > 0 && c.MedianPx < smallPx {
+			bucket = &small
+		}
+		bucket.total++
+		if digitsOK {
+			bucket.digitsExact++
+		}
+		if got == c.Value {
+			bucket.exact++
+		}
 		if got == c.Value {
 			exact++
 			fmt.Printf("PASS  %-16s %q\n", c.File, got)
@@ -130,6 +174,34 @@ func main() {
 		exact, total, 100*float64(exact)/float64(total), 100*charAccSum/float64(total), missing)
 	fmt.Printf("digits-only exact: %d/%d (%.1f%%)   <- ignores '.'/':' placement (decimal-label noise)\n",
 		digitsExact, total, 100*float64(digitsExact)/float64(total))
+
+	if small.total > 0 {
+		fmt.Printf("by resolution: readable (>=%dpx) %d/%d (%.1f%%)   small (<%dpx) %d/%d (%.1f%%)\n",
+			smallPx, readable.exact, readable.total, 100*float64(readable.exact)/float64(readable.total),
+			smallPx, small.exact, small.total, 100*float64(small.exact)/float64(small.total))
+	}
+
+	// Per-source breakdown: which datasets pass, and how much of each source's
+	// failure is punctuation/GT-label noise (the strict-vs-digits-only gap) versus
+	// genuine digit-recognition error. Sorted worst strict pass-rate first.
+	if len(srcOrder) > 1 {
+		sort.Slice(srcOrder, func(i, j int) bool {
+			a, b := bySource[srcOrder[i]], bySource[srcOrder[j]]
+			ra := float64(a.exact) / float64(a.total)
+			rb := float64(b.exact) / float64(b.total)
+			if ra != rb {
+				return ra < rb
+			}
+			return srcOrder[i] < srcOrder[j]
+		})
+		fmt.Println("---- by source (worst strict first) ----")
+		for _, s := range srcOrder {
+			st := bySource[s]
+			fmt.Printf("%-26s strict %3d/%-3d (%5.1f%%)   digits-only %3d/%-3d (%5.1f%%)\n",
+				s, st.exact, st.total, 100*float64(st.exact)/float64(st.total),
+				st.digitsExact, st.total, 100*float64(st.digitsExact)/float64(st.total))
+		}
+	}
 }
 
 // digitsOnly strips the punctuation whose placement is ambiguously/inconsistently
