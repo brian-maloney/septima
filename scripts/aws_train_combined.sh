@@ -112,9 +112,14 @@ if [ "${FREE_GB:-0}" -ge 1000000 ]; then ok "disk free: ample (network FS)"; \
 elif [ "${FREE_GB:-0}" -ge 25 ];    then ok "disk free: ${FREE_GB} GB"; \
 else warn "only ${FREE_GB:-?} GB free — consider SEPTIMA_CACHE=disk or False"; fi
 
-# 5. render.py is the diverse-colon generator -----------------------------------
-grep -q "Diversify colon appearance" training/synth/render.py \
-  || die "render.py is NOT the diverse-colon version — sync the latest code"
+# 5. render.py generator present ------------------------------------------------
+# NOTE: the diverse/superset colon synth was RETIRED as net-negative (runs #5/#6
+# regressed the standard colons the baseline already reads, and #6 also cost digit
+# accuracy — see scripts/gate_run6.sh and the colon memory). render.py is back to
+# the known-good baseline generator; this script now serves the still-valid part:
+# real_hard + real_tank hard-negative digit fine-tuning.
+grep -q 'char == ":"' training/synth/render.py \
+  || die "training/synth/render.py missing/!= expected generator — sync the latest code"
 ok "render.py is the diverse-colon generator"
 
 # 6. classes.json 13-class ------------------------------------------------------

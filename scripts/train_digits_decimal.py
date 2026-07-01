@@ -219,16 +219,17 @@ def check_data_present(pf: Preflight, min_decimal: int, min_colon: int):
 
 
 def check_render_code(pf: Preflight):
-    """Soft check that render.py carries the diverse-colon generator (the targeted
-    colon-synthesis change), so the run actually adds the new colon variety."""
+    """Confirm render.py is present as the synth generator. The diverse/superset
+    colon variant was RETIRED as net-negative (runs #5/#6 regressed the standard
+    colons the baseline already reads; #6 also cost digit accuracy — see
+    scripts/gate_run6.sh). render.py is back to the known-good baseline generator."""
     if not RENDER_PY.exists():
         pf.warn("render.py not found (cannot confirm generator version)")
         return
-    src = RENDER_PY.read_text()
-    if "Diversify colon appearance" in src and "square" in src:
-        pf.ok("render.py is the diverse-colon generator (varied dot size/position/shape)")
+    if 'char == ":"' in RENDER_PY.read_text():
+        pf.ok("render.py present (baseline generator; diverse-colon synth retired)")
     else:
-        pf.warn("render.py lacks the diverse-colon code — synth may be the OLD generator")
+        pf.warn("render.py missing the glyph generator — sync the latest code")
 
 
 def check_device(pf: Preflight, device: str, allow_cpu: bool):

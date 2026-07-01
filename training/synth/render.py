@@ -64,7 +64,7 @@ def seg_polys(x0, y0, x1, y1):
     }
 
 
-def draw_glyph(rgb: ImageDraw.ImageDraw, lab: ImageDraw.ImageDraw, char, cell, gid, pal, rng=None):
+def draw_glyph(rgb: ImageDraw.ImageDraw, lab: ImageDraw.ImageDraw, char, cell, gid, pal):
     """Draw one glyph into the RGB image and the label map; return its YOLO box
     region as drawn-pixel extent (xa,ya,xb,yb), or None to skip."""
     x0, y0, x1, y1 = cell
@@ -99,43 +99,12 @@ def draw_glyph(rgb: ImageDraw.ImageDraw, lab: ImageDraw.ImageDraw, char, cell, g
         return tuple(box)
 
     if char == ":":
-        # Diversify colon appearance so the detector learns ':' as a two-dot SHAPE
-        # class rather than memorizing the single washing-machine style in the only
-        # real colon source (rf_tmnsi_colon), OR firing the two dots as separate weak
-        # '.' decimals.  Run #5 did exactly that on real small colons (microwave 21:24
-        # -> "21.24"): BOTH dots were detected but as low-confidence '.', the upper at
-        # 0.05, and their gap (~0.15h) was tighter than the old synth minimum (~0.24h)
-        # so MergeColonDots couldn't rebuild ':'.  Fix = render colons across a WIDER
-        # geometry: vary the vertical CENTER and the GAP (parameterised as a half-gap
-        # about the center) down to TIGHT spacings that match small real displays, and
-        # allow SMALLER dots.  Keep the two dots EQUAL (no bottom bias) so the upper dot
-        # is as learnable as the lower.  The whole colon is one box / one gid -> the ':'
-        # class, matching how the real colon set labels it.
-        if rng is None:
-            r_top = r_bot = 0.14 * w
-            ty, by = y0 + h * 0.36, y0 + h * 0.64
-            cx = x0 + w / 2
-            square = False
-        else:
-            # SUPERSET geometry: the old generator covered only medium/WIDE colons (gap
-            # 0.24-0.52h, r 0.10-0.20w) and baseline already reads those (large clock
-            # colon "12:17" is correct).  Keep that full wide range AND extend down to
-            # TIGHT/SMALL (gap to 0.18h, r to 0.08w) for small displays like the
-            # microwave.  Union, not a shift, so run #6 cannot lose wide-colon coverage.
-            r_top = rng.uniform(0.08, 0.20) * w
-            r_bot = r_top * rng.uniform(0.90, 1.10)
-            mid = y0 + h * rng.uniform(0.40, 0.60)     # varied vertical center
-            half_gap = h * rng.uniform(0.09, 0.26)     # gap 0.18h (tight) .. 0.52h (wide)
-            ty, by = mid - half_gap, mid + half_gap
-            cx = x0 + w / 2 + rng.uniform(-0.06, 0.06) * w
-            square = rng.random() < 0.30
+        r = 0.14 * w
+        cx = x0 + w / 2
         out = None
-        for cy, r in ((ty, r_top), (by, r_bot)):
+        for cy in (y0 + h * 0.33, y0 + h * 0.66):
             box = [cx - r, cy - r, cx + r, cy + r]
-            if square:
-                rgb.rectangle(box, fill=on); lab.rectangle(box, fill=gid)
-            else:
-                rgb.ellipse(box, fill=on); lab.ellipse(box, fill=gid)
+            rgb.ellipse(box, fill=on); lab.ellipse(box, fill=gid)
             out = (min(box[0], out[0]) if out else box[0], min(box[1], out[1]) if out else box[1],
                    max(box[2], out[2]) if out else box[2], max(box[3], out[3]) if out else box[3])
         return out
@@ -155,22 +124,13 @@ def random_text(rng) -> str:
     kind = rng.random()
     n = rng.randint(1, 6)
     digits = "".join(rng.choice("0123456789") for _ in range(n))
-    if kind < 0.47:                     # plain integer (tank-like)
+    if kind < 0.5:                      # plain integer (tank-like)
         return digits
-    if kind < 0.66 and n >= 2:          # decimal
+    if kind < 0.7 and n >= 2:           # decimal
         k = rng.randint(1, max(1, n - 1))
         return digits[:k] + "." + digits[k:]
-    if kind < 0.84 and n >= 3:          # clock-like colon. The only real colon
-        # source is one device, so synth carries colon DIVERSITY (appearance), but
-        # the share is only modestly boosted (~18%, vs 15% baseline): a 40-epoch run
-        # with colon at 25% drifted confidence DOWN on hard tilted real glyphs
-        # (calc/RSA/shell regressed). Vary the split position and occasionally
-        # render HH:MM:SS so ':' is seen in varied digit contexts.
-        if n >= 5 and rng.random() < 0.4:           # HH:MM:SS style
-            return digits[:n - 4] + ":" + digits[n - 4:n - 2] + ":" + digits[n - 2:]
-        k = rng.choice([1, 2, 2, 2, 3]) if n >= 4 else 2
-        k = min(k, n - 1)
-        return digits[:k] + ":" + digits[k:]
+    if kind < 0.85 and n >= 3:          # clock-like colon
+        return digits[:2] + ":" + digits[2:]
     if kind < 0.92:                     # negative
         return "-" + digits
     return digits
@@ -194,7 +154,7 @@ def render_display(text, dh, pal, rng):
     for i, c in enumerate(text):
         cw = widths[i]
         cell = (x, pad, x + cw, pad + dh)
-        region = draw_glyph(drgb, dlab, c, cell, gid=i + 1, pal=pal, rng=rng)
+        region = draw_glyph(drgb, dlab, c, cell, gid=i + 1, pal=pal)
         if region is not None and c in LABEL_INDEX:
             boxes.append((LABEL_INDEX[c], *region))
         x += cw + gap
