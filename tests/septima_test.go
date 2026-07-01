@@ -58,8 +58,9 @@ func modelDirOption(t *testing.T) septima.Option {
 // documenting the open limitations; a case that starts passing fails loudly so
 // the entry can be removed (see checkKnownHard).
 var knownHard = map[string]string{
-	"images.jpeg": "microwave colon 21:24 under-detected (tiny 259x194 image, no colon signal even at conf 0.03)",
-	"spr-dreamsky-small-digital-alarm-clock-shannon-hansen-day-07-e2a02c3024284199b116f67d4107c28b.jpeg": "alarm-clock colon 2:47 under-detected by the baseline model (the diverse-colon fine-tune fixes it but is pending a gentler re-run — see scripts/aws_train_colon.sh)",
+	"images.jpeg": "microwave colon 21:24 -> \"21.24\": both colon dots detected but as low-conf '.' on a tiny 259x194 image (upper dot 0.05); resolution-limited, run #6 colon-geometry synth is the attempt",
+	"spr-dreamsky-small-digital-alarm-clock-shannon-hansen-day-07-e2a02c3024284199b116f67d4107c28b.jpeg": "ATYPICAL colon: lower 'dot' is an alarm-bell icon, not a standard colon; retained as an OOD stress case (the standard-colon test is Digital-clock-radio-basic_hf.jpg), may never pass",
+	"Digital-clock-radio-basic_hf.jpg": "standard clock colon 12:17 -> \"-12:17\": the baseline reads the COLON correctly (large standard colons already work); the failure is the leading 'AUTO.' indicator LED misread as '-' (leading '-' is kept for negatives). Colon-only crop reads \"12:17\" perfectly. This is an indicator-rejection case, not a colon case",
 }
 
 // checkKnownHard reconciles a result with the knownHard list: it fails when a

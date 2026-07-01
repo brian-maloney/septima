@@ -49,7 +49,13 @@
       "file": "spr-dreamsky-small-digital-alarm-clock-shannon-hansen-day-07-e2a02c3024284199b116f67d4107c28b.jpeg",
       "value": "2:47",
       "display_type": "alarm_clock",
-      "notes": "Digital alarm clock, 2:47 PM (PM indicator visible)"
+      "notes": "ATYPICAL colon: round top dot + an alarm-bell ICON as the lower 'dot' (not a standard colon). Retained as an out-of-distribution stress case; the standard-colon test is Digital-clock-radio-basic_hf.jpg."
+    },
+    {
+      "file": "Digital-clock-radio-basic_hf.jpg",
+      "value": "12:17",
+      "display_type": "clock_radio",
+      "notes": "Standard red-LED clock radio, 12:17 PM, clean two-dot colon. Source: Wikimedia Commons (Digital-clock-radio-basic_hf.jpg). Baseline reads the colon correctly but prepends '-' from the AUTO. indicator LED (-> '-12:17'); the digits-only crop reads '12:17' perfectly, confirming large standard colons already work."
     }
   ]
 }

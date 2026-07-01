@@ -99,22 +99,34 @@ def draw_glyph(rgb: ImageDraw.ImageDraw, lab: ImageDraw.ImageDraw, char, cell, g
         return tuple(box)
 
     if char == ":":
-        # Diversify colon appearance so the detector learns ':' as a shape class
-        # rather than memorizing the single washing-machine style in the only real
-        # colon source (rf_tmnsi_colon). Vary dot radius, the two dots' vertical
-        # positions (keeping a clear gap), dot shape (round vs square), and a small
-        # shared horizontal jitter. The whole colon is one box / one gid -> the ':'
+        # Diversify colon appearance so the detector learns ':' as a two-dot SHAPE
+        # class rather than memorizing the single washing-machine style in the only
+        # real colon source (rf_tmnsi_colon), OR firing the two dots as separate weak
+        # '.' decimals.  Run #5 did exactly that on real small colons (microwave 21:24
+        # -> "21.24"): BOTH dots were detected but as low-confidence '.', the upper at
+        # 0.05, and their gap (~0.15h) was tighter than the old synth minimum (~0.24h)
+        # so MergeColonDots couldn't rebuild ':'.  Fix = render colons across a WIDER
+        # geometry: vary the vertical CENTER and the GAP (parameterised as a half-gap
+        # about the center) down to TIGHT spacings that match small real displays, and
+        # allow SMALLER dots.  Keep the two dots EQUAL (no bottom bias) so the upper dot
+        # is as learnable as the lower.  The whole colon is one box / one gid -> the ':'
         # class, matching how the real colon set labels it.
         if rng is None:
             r_top = r_bot = 0.14 * w
-            ty, by = y0 + h * 0.33, y0 + h * 0.66
+            ty, by = y0 + h * 0.36, y0 + h * 0.64
             cx = x0 + w / 2
             square = False
         else:
-            r_top = rng.uniform(0.10, 0.20) * w
-            r_bot = r_top * rng.uniform(0.85, 1.15)
-            ty = y0 + h * rng.uniform(0.24, 0.38)
-            by = y0 + h * rng.uniform(0.62, 0.76)
+            # SUPERSET geometry: the old generator covered only medium/WIDE colons (gap
+            # 0.24-0.52h, r 0.10-0.20w) and baseline already reads those (large clock
+            # colon "12:17" is correct).  Keep that full wide range AND extend down to
+            # TIGHT/SMALL (gap to 0.18h, r to 0.08w) for small displays like the
+            # microwave.  Union, not a shift, so run #6 cannot lose wide-colon coverage.
+            r_top = rng.uniform(0.08, 0.20) * w
+            r_bot = r_top * rng.uniform(0.90, 1.10)
+            mid = y0 + h * rng.uniform(0.40, 0.60)     # varied vertical center
+            half_gap = h * rng.uniform(0.09, 0.26)     # gap 0.18h (tight) .. 0.52h (wide)
+            ty, by = mid - half_gap, mid + half_gap
             cx = x0 + w / 2 + rng.uniform(-0.06, 0.06) * w
             square = rng.random() < 0.30
         out = None
