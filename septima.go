@@ -12,6 +12,7 @@ import (
 	"math"
 	"os"
 	"sort"
+	"strings"
 
 	_ "golang.org/x/image/webp"
 
@@ -90,13 +91,76 @@ func Read(img image.Image, opts ...Option) (Result, error) {
 	// that dilution, so it picks the cleaner reading. A genuine rescue crop (the
 	// tank, where full-frame glyphs are too small to detect at all) still wins,
 	// since its non-empty detections beat the full frame's near-zero mean.
-	dets := fullDets
-	if haveCrop && meanScore(cropDets) > meanScore(fullDets) {
-		dets = cropDets
+	//
+	// Exception: when both candidates read the SAME digit sequence and one of
+	// them additionally detected punctuation, the mean signal is biased AGAINST
+	// the more complete reading (a correct low-confidence '.' drags the mean
+	// down), so prefer the punctuation-bearing reading directly.
+	reading := finalizeReading(fullDets, classes)
+	if haveCrop {
+		cropReading := finalizeReading(cropDets, classes)
+		switch punctAgreementPick(reading.Text, cropReading.Text) {
+		case pickFirst:
+			// keep the full-frame reading
+		case pickSecond:
+			reading = cropReading
+		default:
+			if meanScore(cropDets) > meanScore(fullDets) {
+				reading = cropReading
+			}
+		}
 	}
-
-	reading := finalizeReading(dets, classes)
 	return toResult(reading), nil
+}
+
+// punctAgreementPick decides between two candidate readings that agree on the
+// digit sequence but disagree on punctuation. The candidate with MORE
+// punctuation is preferred — both framings saw the same digits, and the richer
+// one cleared the punctuation confidence bar on a mark the other missed —
+// provided its rows stay well-formed (a second '.' in one row is a phantom
+// tell, e.g. "10.8.00"). Returns pickNone when the rule does not apply and the
+// caller should fall back to the confidence-based selection.
+func punctAgreementPick(a, b string) int {
+	if a == b || digitsOnly(a) != digitsOnly(b) {
+		return pickNone
+	}
+	switch {
+	case punctCount(a) > punctCount(b) && wellFormedRows(a):
+		return pickFirst
+	case punctCount(b) > punctCount(a) && wellFormedRows(b):
+		return pickSecond
+	}
+	return pickNone
+}
+
+const (
+	pickNone = iota
+	pickFirst
+	pickSecond
+)
+
+// digitsOnly strips '.'/':' (keeping row structure), the same digit-sequence
+// view septima-bench's digits-only metric uses.
+func digitsOnly(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '.' || r == ':' {
+			return -1
+		}
+		return r
+	}, s)
+}
+
+func punctCount(s string) int { return strings.Count(s, ".") + strings.Count(s, ":") }
+
+// wellFormedRows reports whether every row reads like one number: at most one
+// '.' and at most one ':' per row.
+func wellFormedRows(s string) bool {
+	for _, row := range strings.Split(s, "\n") {
+		if strings.Count(row, ".") > 1 || strings.Count(row, ":") > 1 {
+			return false
+		}
+	}
+	return true
 }
 
 // finalizeReading applies the shared post-processing pipeline (class-agnostic

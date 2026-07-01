@@ -75,8 +75,17 @@ func (r record) best() (string, bool) {
 	return r.full, false
 }
 
-// live reproduces septima.Read's mean-confidence selection.
+// live reproduces septima.Read's candidate selection: the punct-agreement
+// override (matches septima.punctAgreementPick) first, then mean confidence.
 func (r record) live() string {
+	if r.full != r.crop && digitsOnly(r.full) == digitsOnly(r.crop) {
+		switch {
+		case punctCount(r.full) > punctCount(r.crop) && wellFormed(r.full):
+			return r.full
+		case punctCount(r.crop) > punctCount(r.full) && wellFormed(r.crop):
+			return r.crop
+		}
+	}
 	if r.cropMean > r.fullMean {
 		return r.crop
 	}
@@ -267,7 +276,7 @@ func report(recs []record, topN int) {
 	n := len(recs)
 	fmt.Printf("=== reproduction (n=%d) ===\n", n)
 	pct := func(x int) float64 { return 100 * float64(x) / float64(max(n, 1)) }
-	fmt.Printf("live (mean-select) exact : %d (%.1f%%)   char acc %.1f%%\n", liveExact, pct(liveExact), 100*liveCharSum/float64(max(n, 1)))
+	fmt.Printf("live (selection)   exact : %d (%.1f%%)   char acc %.1f%%\n", liveExact, pct(liveExact), 100*liveCharSum/float64(max(n, 1)))
 	fmt.Printf("full-frame only    exact : %d (%.1f%%)\n", fullExact, pct(fullExact))
 	fmt.Printf("panel-crop only    exact : %d (%.1f%%)\n", cropExact, pct(cropExact))
 	fmt.Printf("oracle-select      exact : %d (%.1f%%)   <- ceiling if selector were perfect\n", oracleExact, pct(oracleExact))
@@ -306,6 +315,44 @@ func report(recs []record, topN int) {
 
 	writeDetail("analyze_bothwrong.tsv", bw)
 	fmt.Printf("\nwrote per-image both-wrong detail to analyze_bothwrong.tsv (%d rows)\n", len(bw))
+
+	// Selection losses: the live mean-confidence pick was wrong while the other
+	// candidate read the GT exactly. These are the images a better selector
+	// would recover (oracle-select minus live).
+	fmt.Printf("\n=== selection losses (live wrong, other candidate exactly right) ===\n")
+	for _, r := range recs {
+		live := r.live()
+		if live == r.gt {
+			continue
+		}
+		other, otherMean, liveMean := r.full, r.fullMean, r.cropMean
+		won := "crop"
+		if live == r.full {
+			other, otherMean, liveMean = r.crop, r.cropMean, r.fullMean
+			won = "full"
+		}
+		if other != r.gt {
+			continue
+		}
+		fmt.Printf("  %-50s gt=%-12q %s won mean %.3f vs %.3f  full=%q crop=%q\n",
+			r.file, r.gt, won, liveMean, otherMean, r.full, r.crop)
+	}
+
+	// Margin distribution among correct picks, to gauge how much a selector
+	// change could break: a flip rule endangers correct picks with small margins.
+	fmt.Printf("\n=== mean-confidence margin |full-crop| when live is RIGHT and candidates disagree ===\n")
+	var margins []float64
+	for _, r := range recs {
+		if r.live() == r.gt && r.full != r.crop {
+			margins = append(margins, math.Abs(r.fullMean-r.cropMean))
+		}
+	}
+	sort.Float64s(margins)
+	if len(margins) > 0 {
+		q := func(p float64) float64 { return margins[int(p*float64(len(margins)-1))] }
+		fmt.Printf("  n=%d  p10=%.3f p25=%.3f p50=%.3f p75=%.3f p90=%.3f\n",
+			len(margins), q(.10), q(.25), q(.50), q(.75), q(.90))
+	}
 }
 
 // conditionTags labels a both-wrong case by GT/image properties so we can see
@@ -446,6 +493,30 @@ func writeDetail(path string, bw []record) {
 
 func oneline(s string) string { return strings.ReplaceAll(s, "\n", "\\n") }
 func strip(s string) string   { return strings.ReplaceAll(s, "\n", "") }
+
+// digitsOnly removes '.'/':' (keeps row structure) — matches septima-bench's
+// digits-only metric.
+func digitsOnly(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '.' || r == ':' {
+			return -1
+		}
+		return r
+	}, s)
+}
+
+func punctCount(s string) int { return strings.Count(s, ".") + strings.Count(s, ":") }
+
+// wellFormed reports whether every row reads like one number: at most one '.'
+// and at most one ':' per row. A second dot in a row is a phantom tell.
+func wellFormed(s string) bool {
+	for _, row := range strings.Split(s, "\n") {
+		if strings.Count(row, ".") > 1 || strings.Count(row, ":") > 1 {
+			return false
+		}
+	}
+	return true
+}
 
 func disp(r rune) string {
 	switch r {
