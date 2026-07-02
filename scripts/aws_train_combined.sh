@@ -32,7 +32,12 @@
 #   SEPTIMA_EPOCHS   (30)    epochs — longer than the 20ep combined run so the
 #                            stronger (x60) hard-negatives can fully counter the
 #                            colon-synth digit drift; override lower if it over-trades
-#   SEPTIMA_BATCH    (32)
+#   SEPTIMA_IMGSZ    (1280)  training/export image size. 1280 (up from 640) gives
+#                            the head far more pixels on thin '1's, colons and
+#                            distant panels. ~4x the activation memory of 640, so
+#                            drop SEPTIMA_BATCH if you OOM (see below).
+#   SEPTIMA_BATCH    (32)    NOTE: at imgsz=1280 an L4/A10G (24 GB) typically needs
+#                            batch 8 (or -1 for autobatch); 32 is a 640-era default.
 #   SEPTIMA_DEVICE   (0)
 #   SEPTIMA_NAME     (digits_combined)
 #   SEPTIMA_CACHE    (ram)   ram=fast (needs ~25 GB RAM); disk=safe; False=off
@@ -48,6 +53,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 EPOCHS="${SEPTIMA_EPOCHS:-30}"
+IMGSZ="${SEPTIMA_IMGSZ:-1280}"
 BATCH="${SEPTIMA_BATCH:-32}"
 DEVICE="${SEPTIMA_DEVICE:-0}"
 NAME="${SEPTIMA_NAME:-digits_combined}"
@@ -187,19 +193,21 @@ if [ "$CHECK_ONLY" -eq 1 ]; then
 fi
 
 # 12. fine-tune — no freeze (freeze=11 prevented colon learning in run #3) ------
-say "Fine-tuning digits from best.pt (device ${DEVICE}, ${EPOCHS} epochs, batch ${BATCH}, cache ${CACHE}, NO backbone freeze, name ${NAME})"
+say "Fine-tuning digits from best.pt (device ${DEVICE}, ${EPOCHS} epochs, imgsz ${IMGSZ}, batch ${BATCH}, cache ${CACHE}, NO backbone freeze, name ${NAME})"
 python scripts/train_digits_decimal.py \
   --device "$DEVICE" \
   --epochs "$EPOCHS" \
+  --imgsz  "$IMGSZ"  \
   --batch  "$BATCH"  \
   --cache  "$CACHE"  \
   --name   "$NAME"
 # No --freeze: train_digits_decimal.py defaults to no freeze when omitted.
 
 # 13. export to models/digits.onnx ---------------------------------------------
-say "Exporting ONNX -> models/digits.onnx"
+say "Exporting ONNX -> models/digits.onnx (imgsz ${IMGSZ})"
 python training/export_onnx.py \
   --stage digits \
+  --imgsz "$IMGSZ" \
   --weights "training/runs/${NAME}/weights/best.pt"
 
 # 14. verify (best-effort; needs Go + onnxruntime on box) ----------------------

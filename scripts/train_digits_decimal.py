@@ -260,6 +260,8 @@ def main():
     ap.add_argument("--device", default=None,
                     help="mps | cpu | 0 (cuda); auto-detected when omitted")
     ap.add_argument("--epochs", type=int, default=40)
+    ap.add_argument("--imgsz", type=int, default=640,
+                    help="training image size (must match export/inference imgsz)")
     ap.add_argument("--batch", type=int, default=16)
     ap.add_argument("--cache", default="disk", help="ram | disk | False")
     ap.add_argument("--name", default="digits_decimal")
@@ -320,6 +322,7 @@ def main():
            "--data", str(FINETUNE_YAML),
            "--model", str(args.base),
            "--epochs", str(args.epochs),
+           "--imgsz", str(args.imgsz),
            "--batch", str(args.batch),
            "--device", args.device,
            "--cache", args.cache,
