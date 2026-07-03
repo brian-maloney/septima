@@ -1,0 +1,79 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+env:
+  ONNXRUNTIME_VERSION: "1.27.0"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+            ort_dir: onnxruntime-osx-arm64-1.27.0
+            ort_asset: onnxruntime-osx-arm64-1.27.0.tgz
+            ort_lib: libonnxruntime.1.27.0.dylib
+          - os: ubuntu-latest
+            goos: linux
+            goarch: x64
+            ort_dir: onnxruntime-linux-x64-1.27.0
+            ort_asset: onnxruntime-linux-x64-1.27.0.tgz
+            ort_lib: libonnxruntime.so.1.27.0
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build binaries
+        run: |
+          mkdir -p dist
+          go build -o dist/septima ./cmd/septima
+          go build -o dist/septima-bench ./cmd/septima-bench
+
+      - name: Fetch ONNX Runtime shared library
+        run: |
+          curl -sL -o ort.tgz "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/${{ matrix.ort_asset }}"
+          tar xzf ort.tgz
+          cp "${{ matrix.ort_dir }}/lib/${{ matrix.ort_lib }}" dist/
+
+      - name: Package archive
+        run: |
+          cp -r models dist/models
+          cp README.md LICENSE dist/
+          archive="septima-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz"
+          tar czf "$archive" -C dist .
+          echo "ARCHIVE=$archive" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: septima-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: ${{ env.ARCHIVE }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*/*.tar.gz
+          generate_release_notes: true
