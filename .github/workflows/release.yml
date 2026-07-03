@@ -42,8 +42,9 @@ jobs:
       - name: Build binaries
         run: |
           mkdir -p dist
-          go build -o dist/septima ./cmd/septima
-          go build -o dist/septima-bench ./cmd/septima-bench
+          ldflags="-X github.com/brian-maloney/septima.Version=${GITHUB_REF_NAME}"
+          go build -ldflags "$ldflags" -o dist/septima ./cmd/septima
+          go build -ldflags "$ldflags" -o dist/septima-bench ./cmd/septima-bench
 
       - name: Fetch ONNX Runtime shared library
         run: |

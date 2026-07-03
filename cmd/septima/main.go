@@ -16,8 +16,13 @@ func main() {
 		profile  = flag.String("profile", "", "display-type hint (e.g. tank_gauge)")
 		conf     = flag.Float64("conf", 0.25, "detection confidence threshold")
 		verbose  = flag.Bool("v", false, "print per-digit detail")
+		version  = flag.Bool("version", false, "print version and exit")
 	)
 	flag.Parse()
+	if *version {
+		fmt.Println("septima", septima.Version)
+		return
+	}
 	if flag.NArg() != 1 {
 		fmt.Fprintln(os.Stderr, "usage: septima [flags] IMAGE")
 		flag.PrintDefaults()
