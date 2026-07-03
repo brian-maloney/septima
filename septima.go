@@ -43,6 +43,15 @@ func ReadFile(path string, opts ...Option) (Result, error) {
 // Read recognizes the display in an already-decoded image.
 func Read(img image.Image, opts ...Option) (Result, error) {
 	o := applyOptions(opts)
+
+	if len(o.Pipeline) > 0 {
+		pre, err := o.Pipeline.Apply(img)
+		if err != nil {
+			return Result{}, fmt.Errorf("septima: %w", err)
+		}
+		img = pre
+	}
+
 	modelDir := resolveModelDir(o.ModelDir)
 
 	classes, err := detect.LoadClasses(modelDir)

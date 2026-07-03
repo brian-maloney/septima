@@ -1,5 +1,7 @@
 package septima
 
+import "github.com/brian-maloney/septima/preprocess"
+
 // Options holds tunable parameters for a recognition call.
 // The zero value is filled in by defaultOptions().
 type Options struct {
@@ -35,6 +37,11 @@ type Options struct {
 	// SkipPanel bypasses stage-1 panel localization and runs the digit detector
 	// on the image as given (used for diagnostics / pre-cropped inputs).
 	SkipPanel bool
+
+	// Pipeline is an optional sequence of ssocr-style image manipulation
+	// operations (crop, rotate, threshold, ...) applied to the input image,
+	// in order, before detection.
+	Pipeline preprocess.Pipeline
 }
 
 func defaultOptions() Options {
@@ -77,6 +84,13 @@ func WithDebugDir(dir string) Option { return func(o *Options) { o.DebugDir = di
 // WithSkipPanel bypasses stage-1 panel localization (for diagnostics or when the
 // input is already a tight display crop).
 func WithSkipPanel(b bool) Option { return func(o *Options) { o.SkipPanel = b } }
+
+// WithPipeline appends ssocr-style image manipulation operations (crop,
+// rotate, threshold, ...) to run on the input image, in order, before
+// detection. Repeated calls append rather than replace.
+func WithPipeline(ops ...preprocess.Op) Option {
+	return func(o *Options) { o.Pipeline = append(o.Pipeline, ops...) }
+}
 
 func applyOptions(opts []Option) Options {
 	o := defaultOptions()
