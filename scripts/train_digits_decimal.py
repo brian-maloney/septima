@@ -290,9 +290,10 @@ def main():
         print(f"auto-detected device: {args.device}")
 
     if args.regen_synth:
-        print("Regenerating synthetic data (4000 digit / 1500 panel) ...")
+        print(f"Regenerating synthetic data (4000 digit / 1500 panel) at imgsz {args.imgsz} ...")
         rc = subprocess.run([sys.executable, str(RENDER_PY),
-                             "--digits", "4000", "--panels", "1500"]).returncode
+                             "--digits", "4000", "--panels", "1500",
+                             "--img-size", str(args.imgsz)]).returncode
         if rc != 0:
             print(f"{RED}render.py failed (rc={rc}); aborting.{RESET}")
             return 2

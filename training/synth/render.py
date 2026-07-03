@@ -31,6 +31,11 @@ DATA = HERE.parent / "data"
 DIGIT_LABELS = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", ".", ":", "-"]
 LABEL_INDEX = {c: i for i, c in enumerate(DIGIT_LABELS)}
 
+# Reference canvas the glyph-height and appearance ranges were tuned for. Glyph
+# heights scale with the actual --img-size / BASE_IMG_SIZE so a 1280 render draws
+# glyphs at native ~2x resolution (crisp) instead of small glyphs YOLO upscales.
+BASE_IMG_SIZE = 640
+
 # Active segments per character: a,b,c,d,e,f,g.
 SEG = {
     "0": "abcdef", "1": "bc", "2": "abdeg", "3": "abcdg", "4": "bcfg",
@@ -246,16 +251,20 @@ def scene_background(canvas, rng):
     return canvas
 
 
-def appearance(img, rng):
+def appearance(img, rng, res_scale=1.0):
+    """Appearance-only noise. res_scale ties pixel-absolute effects (blur radius,
+    glare size) to the canvas resolution so a 1280 render is softened the same
+    *relative* amount as a 640 one — otherwise higher-res synth looks unnaturally
+    crisp versus real photos and widens the domain gap."""
     if rng.random() < 0.6:
-        img = img.filter(ImageFilter.GaussianBlur(rng.uniform(0.3, 1.6)))
+        img = img.filter(ImageFilter.GaussianBlur(rng.uniform(0.3, 1.6) * res_scale))
     arr = np.asarray(img).astype(np.float32)
     arr += rng.uniform(0, 12) * np.random.randn(*arr.shape)        # sensor noise
     arr *= rng.uniform(0.8, 1.2)                                    # brightness
     if rng.random() < 0.35:                                         # glare blob
         gy, gx = np.ogrid[:arr.shape[0], :arr.shape[1]]
         cy, cx = rng.randint(0, arr.shape[0]), rng.randint(0, arr.shape[1])
-        r = rng.randint(20, 90)
+        r = int(rng.randint(20, 90) * res_scale)
         mask = ((gx - cx) ** 2 + (gy - cy) ** 2) < r * r
         arr[mask] += rng.uniform(40, 120)
     return Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8))
@@ -291,7 +300,7 @@ def warp_appearance(text, dh, pal, rng, out_size, place):
     appearance-only noise to the image. Returns (RGB canvas, label np array)."""
     img, lab_arr, _ = render_display(text, dh, pal, rng)
     canvas, lab_canvas = warp_pair(img, Image.fromarray(lab_arr), rng, out_size, place)
-    return appearance(canvas, rng), lab_canvas
+    return appearance(canvas, rng, out_size / BASE_IMG_SIZE), lab_canvas
 
 
 def main():
@@ -306,11 +315,12 @@ def main():
     rng = random.Random(args.seed)
     np.random.seed(args.seed)
     S = args.img_size
+    dh_scale = S / BASE_IMG_SIZE   # keep glyphs native-res as the canvas grows
     digits_root, panel_root = DATA / "digits", DATA / "panel"
 
     for i in range(args.digits):
         text = random_text(rng)
-        dh = rng.uniform(70, 150)
+        dh = rng.uniform(70, 150) * dh_scale
         pal = random_palette(rng)
         canvas, lab = warp_appearance(text, dh, pal, rng, S, "fill")
         id_to_class = {gid + 1: LABEL_INDEX[c] for gid, c in enumerate(text) if c in LABEL_INDEX}
@@ -325,7 +335,7 @@ def main():
 
     for i in range(args.panels):
         text = random_text(rng)
-        dh = rng.uniform(50, 120)
+        dh = rng.uniform(50, 120) * dh_scale
         pal = random_palette(rng)
         canvas, lab = warp_appearance(text, dh, pal, rng, S, "scene")
         ys, xs = np.where(lab > 0)

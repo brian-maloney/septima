@@ -29,18 +29,22 @@
 #   bash scripts/aws_train_combined.sh --no-regen-synth # skip synth regen (use box's copy)
 #
 # Tunables (env vars):
-#   SEPTIMA_EPOCHS   (30)    epochs — longer than the 20ep combined run so the
-#                            stronger (x60) hard-negatives can fully counter the
-#                            colon-synth digit drift; override lower if it over-trades
 #   SEPTIMA_IMGSZ    (1280)  training/export image size. 1280 (up from 640) gives
-#                            the head far more pixels on thin '1's, colons and
-#                            distant panels. ~4x the activation memory of 640, so
-#                            drop SEPTIMA_BATCH if you OOM (see below).
-#   SEPTIMA_BATCH    (32)    NOTE: at imgsz=1280 an L4/A10G (24 GB) typically needs
-#                            batch 8 (or -1 for autobatch); 32 is a 640-era default.
+#                            the head ~4x the pixels on thin '1's, colons and
+#                            distant panels. CRITICAL: the synth is regenerated at
+#                            THIS size (render.py --img-size) so glyphs are drawn at
+#                            native 1280 resolution — the first 1280 run trained on
+#                            640 synth YOLO merely upscaled, which is why it lost
+#                            ~6pp. Costs ~4x activation memory, so batch auto-drops.
+#   SEPTIMA_EPOCHS   (60)    epochs. Doubled from the 640-era 30: at 1280 the head
+#                            re-adapts the glyph scale from the 640 base best.pt and
+#                            needs longer to converge (30 under-trained the 1st run).
+#   SEPTIMA_BATCH    (auto)  default 8 when IMGSZ>=1024 (fits an L4/A10G 24 GB at
+#                            1280), else 32. Set -1 for ultralytics autobatch.
 #   SEPTIMA_DEVICE   (0)
 #   SEPTIMA_NAME     (digits_combined)
-#   SEPTIMA_CACHE    (ram)   ram=fast (needs ~25 GB RAM); disk=safe; False=off
+#   SEPTIMA_CACHE    (ram)   ram=fast (needs LOTS of RAM at 1280 — ~4x vs 640; use
+#                            disk if the box has <64 GB); disk=safe; False=off
 #   SEPTIMA_DIGITS_SYNTH  (8000)
 #   SEPTIMA_PANELS_SYNTH  (2500)
 #
@@ -52,9 +56,18 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-EPOCHS="${SEPTIMA_EPOCHS:-30}"
 IMGSZ="${SEPTIMA_IMGSZ:-1280}"
-BATCH="${SEPTIMA_BATCH:-32}"
+EPOCHS="${SEPTIMA_EPOCHS:-60}"
+# Batch scales inversely with resolution: 1280 needs ~4x the memory of 640, so a
+# 24 GB GPU that ran batch 32 at 640 wants batch 8 at 1280. Auto-pick unless the
+# caller pinned SEPTIMA_BATCH.
+if [ -n "${SEPTIMA_BATCH:-}" ]; then
+  BATCH="$SEPTIMA_BATCH"
+elif [ "$IMGSZ" -ge 1024 ]; then
+  BATCH=8
+else
+  BATCH=32
+fi
 DEVICE="${SEPTIMA_DEVICE:-0}"
 NAME="${SEPTIMA_NAME:-digits_combined}"
 CACHE="${SEPTIMA_CACHE:-ram}"
@@ -173,18 +186,38 @@ if [ "${N_HARD:-0}" -lt 250 ]; then
   warn "real_hard has ${N_HARD} imgs (<${EXPECT_HARD}); did you stage the shell pump at x60? (stage_real_hard.py)"
 fi
 
-# 11. regenerate colon-diverse synth ON this box --------------------------------
+# 11. regenerate synth ON this box, AT THE TRAINING RESOLUTION ------------------
+# The synth MUST be rendered at IMGSZ: render.py draws glyphs at native
+# --img-size resolution, so a 1280 render is crisp where a 640 render upscaled by
+# YOLO is blurry. Regenerating also flushes any stale synth from a prior run.
 if [ "$REGEN_SYNTH" -eq 1 ]; then
-  say "Regenerating colon-diverse synth (${DIGITS_SYNTH} digit / ${PANELS_SYNTH} panel)"
+  say "Regenerating synth at imgsz ${IMGSZ} (${DIGITS_SYNTH} digit / ${PANELS_SYNTH} panel)"
+  # Purge every prior synth image+label so nothing from an earlier resolution
+  # lingers (synth_d*, synth_p* covers both .jpg and .txt).
   find training/data/digits training/data/panel \
        \( -name 'synth_d*' -o -name 'synth_p*' \) -delete 2>/dev/null || true
-  python training/synth/render.py --digits "$DIGITS_SYNTH" --panels "$PANELS_SYNTH"
-  find training/data -name 'labels.cache' -delete 2>/dev/null || true
+  python training/synth/render.py --digits "$DIGITS_SYNTH" --panels "$PANELS_SYNTH" \
+      --img-size "$IMGSZ"
+  # Flush ALL ultralytics caches (*.cache label caches AND *.npy disk-image
+  # caches): they are keyed to the old images/size and would otherwise be reused
+  # stale, silently training on the previous resolution.
+  find training/data \( -name '*.cache' -o -name '*.npy' \) -delete 2>/dev/null || true
   N_COL="$(grep -l '^11 ' training/data/digits/train/labels/synth_*.txt 2>/dev/null \
            | wc -l | tr -d ' ')" || true
-  ok "synth regenerated; train files with a colon ':' box: ${N_COL:-0}"
+  # Confirm the freshly-rendered synth is actually at IMGSZ (guards a stale
+  # render.py that ignored --img-size).
+  FIRST_SYNTH="$(find training/data/digits/train/images -name 'synth_d*.jpg' 2>/dev/null | head -1)"
+  if [ -n "$FIRST_SYNTH" ]; then
+    SYNTH_W="$(python - "$FIRST_SYNTH" <<'PY'
+import sys; from PIL import Image; print(Image.open(sys.argv[1]).size[0])
+PY
+)"
+    [ "${SYNTH_W:-0}" = "$IMGSZ" ] \
+      && ok "synth regenerated at ${SYNTH_W}px; train files with a colon ':' box: ${N_COL:-0}" \
+      || die "synth rendered at ${SYNTH_W}px, expected ${IMGSZ} — sync the latest render.py"
+  fi
 else
-  warn "--no-regen-synth: using the synth already on the box"
+  warn "--no-regen-synth: using the synth already on the box (NOT verified at imgsz ${IMGSZ})"
 fi
 
 if [ "$CHECK_ONLY" -eq 1 ]; then
@@ -193,6 +226,14 @@ if [ "$CHECK_ONLY" -eq 1 ]; then
 fi
 
 # 12. fine-tune — no freeze (freeze=11 prevented colon learning in run #3) ------
+# Wipe any prior run dir for this NAME so old weights/plots from an earlier
+# resolution can't linger (train.py uses exist_ok=True and would write into it).
+# Never touch the base "digits" run that holds best.pt.
+RUN_DIR="training/runs/${NAME}"
+if [ "$NAME" != "digits" ] && [ -d "$RUN_DIR" ]; then
+  warn "removing prior run dir ${RUN_DIR} for a clean run"
+  rm -rf "$RUN_DIR"
+fi
 say "Fine-tuning digits from best.pt (device ${DEVICE}, ${EPOCHS} epochs, imgsz ${IMGSZ}, batch ${BATCH}, cache ${CACHE}, NO backbone freeze, name ${NAME})"
 python scripts/train_digits_decimal.py \
   --device "$DEVICE" \
