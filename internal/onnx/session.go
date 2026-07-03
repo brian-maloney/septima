@@ -3,8 +3,9 @@
 //
 // The ONNX Runtime shared library is loaded at runtime (not linked at build).
 // Point the engine at it with the SEPTIMA_ORT_LIB environment variable, e.g.
-// the libonnxruntime.*.dylib that ships inside the Python onnxruntime wheel, or
-// a standalone download. CPU works everywhere; CoreML/CUDA are optional.
+// the libonnxruntime.*.dylib/.so that ships inside the Python onnxruntime wheel,
+// or a standalone download (onnxruntime.dll on Windows). CPU works everywhere;
+// CoreML/CUDA are optional.
 package onnx
 
 import (
@@ -51,6 +52,7 @@ func locateORT() string {
 		"training/.venv/lib/python*/site-packages/onnxruntime/capi/libonnxruntime*.so*",
 		"models/libonnxruntime*.dylib",
 		"models/libonnxruntime*.so*",
+		"models/onnxruntime*.dll",
 	}
 	var bases []string
 	if cwd, err := os.Getwd(); err == nil {
