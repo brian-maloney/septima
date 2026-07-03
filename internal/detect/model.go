@@ -11,13 +11,45 @@ import (
 	"github.com/brian-maloney/septima/internal/onnx"
 )
 
-// Classes describes the model input size and class label tables, loaded from
+// defaultInputSize is the YOLO square input size assumed when classes.json names
+// no size at all.
+const defaultInputSize = 640
+
+// Classes describes the model input sizes and class label tables, loaded from
 // models/classes.json. PanelClasses labels the stage-1 detector; DigitClasses
 // labels the stage-2 detector (each entry a single-rune string).
+//
+// The panel and digit models can be exported at different input sizes (e.g. a
+// 640 panel detector feeding a 1280 digit detector), so the sizes are per stage.
+// InputSize is the legacy shared field: it is used as the fallback for either
+// stage whose specific size is absent, keeping older classes.json files working.
+// Read the resolved sizes through PanelSize / DigitSize, never the raw fields.
 type Classes struct {
-	InputSize    int      `json:"input_size"`
-	PanelClasses []string `json:"panel_classes"`
-	DigitClasses []string `json:"digit_classes"`
+	InputSize      int      `json:"input_size"`
+	PanelInputSize int      `json:"panel_input_size"`
+	DigitInputSize int      `json:"digit_input_size"`
+	PanelClasses   []string `json:"panel_classes"`
+	DigitClasses   []string `json:"digit_classes"`
+}
+
+// PanelSize is the stage-1 (panel) detector input size, falling back to the
+// legacy shared input_size and finally the YOLO default of 640.
+func (c Classes) PanelSize() int { return resolveInputSize(c.PanelInputSize, c.InputSize) }
+
+// DigitSize is the stage-2 (digit) detector input size, with the same fallback
+// chain as PanelSize.
+func (c Classes) DigitSize() int { return resolveInputSize(c.DigitInputSize, c.InputSize) }
+
+// resolveInputSize prefers the stage-specific size, then the shared legacy size,
+// then the default — treating any non-positive value as unset.
+func resolveInputSize(stage, shared int) int {
+	if stage > 0 {
+		return stage
+	}
+	if shared > 0 {
+		return shared
+	}
+	return defaultInputSize
 }
 
 // LoadClasses reads classes.json from modelDir.
@@ -29,9 +61,6 @@ func LoadClasses(modelDir string) (Classes, error) {
 	}
 	if err := json.Unmarshal(data, &c); err != nil {
 		return c, fmt.Errorf("parse classes.json: %w", err)
-	}
-	if c.InputSize == 0 {
-		c.InputSize = 640
 	}
 	return c, nil
 }

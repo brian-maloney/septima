@@ -86,13 +86,13 @@ func main() {
 	}
 	punct := punctClasses(classes.DigitClasses)
 
-	digits, err := detect.OpenModel(filepath.Join(*modelDir, "digits.onnx"), len(classes.DigitClasses), classes.InputSize)
+	digits, err := detect.OpenModel(filepath.Join(*modelDir, "digits.onnx"), len(classes.DigitClasses), classes.DigitSize())
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "open digits:", err)
 		os.Exit(1)
 	}
 	defer digits.Close()
-	panel, _ := detect.OpenModel(filepath.Join(*modelDir, "panel.onnx"), len(classes.PanelClasses), classes.InputSize)
+	panel, _ := detect.OpenModel(filepath.Join(*modelDir, "panel.onnx"), len(classes.PanelClasses), classes.PanelSize())
 	if panel != nil {
 		defer panel.Close()
 	}

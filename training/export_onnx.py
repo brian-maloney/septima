@@ -57,12 +57,17 @@ def main():
     dest = MODELS / f"{args.stage}.onnx"
     shutil.copy2(onnx_path, dest)
 
-    # Record the input size so the Go side and classes.json stay in sync.
+    # Record the input size so the Go side and classes.json stay in sync. The
+    # panel and digit stages can be exported at different sizes, so write the
+    # stage-specific key (panel_input_size / digit_input_size) and leave the
+    # other stage untouched. The legacy shared "input_size" is kept only as a
+    # fallback for readers that predate the per-stage keys.
+    size_key = f"{args.stage}_input_size"
     cfg = json.loads((MODELS / "classes.json").read_text())
-    cfg["input_size"] = args.imgsz
+    cfg[size_key] = args.imgsz
     (MODELS / "classes.json").write_text(json.dumps(cfg, indent=2) + "\n")
 
-    print(f"exported {args.stage}: {dest}  (classes verified, input_size={args.imgsz})")
+    print(f"exported {args.stage}: {dest}  (classes verified, {size_key}={args.imgsz})")
 
 
 if __name__ == "__main__":

@@ -45,7 +45,7 @@ func Read(img image.Image, opts ...Option) (Result, error) {
 		return Result{}, fmt.Errorf("septima: %w", err)
 	}
 
-	digits, err := detect.OpenModel(modelPath(modelDir, "digits.onnx"), len(classes.DigitClasses), classes.InputSize)
+	digits, err := detect.OpenModel(modelPath(modelDir, "digits.onnx"), len(classes.DigitClasses), classes.DigitSize())
 	if err != nil {
 		return Result{}, fmt.Errorf("septima: open digit model: %w", err)
 	}
@@ -197,7 +197,7 @@ func toResult(r assemble.Reading) Result {
 // locatePanel finds the display region: the trained panel.onnx if available and
 // it detects something, else the classical bright-panel heuristic.
 func locatePanel(img image.Image, modelDir string, classes detect.Classes, o Options) (image.Rectangle, bool) {
-	if panel, err := detect.OpenModel(modelPath(modelDir, "panel.onnx"), len(classes.PanelClasses), classes.InputSize); err == nil {
+	if panel, err := detect.OpenModel(modelPath(modelDir, "panel.onnx"), len(classes.PanelClasses), classes.PanelSize()); err == nil {
 		defer panel.Close()
 		if dets, derr := panel.Detect(img, o.ConfThreshold, o.IOUThreshold); derr == nil && len(dets) > 0 {
 			return bestDetection(dets).Box, true

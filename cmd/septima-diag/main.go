@@ -64,7 +64,7 @@ func main() {
 		off = r.Min
 		fmt.Fprintf(os.Stderr, "cropped to %v\n", r)
 	} else if *panelModel != "" {
-		pm, err := detect.OpenModel(*panelModel, len(classes.PanelClasses), classes.InputSize)
+		pm, err := detect.OpenModel(*panelModel, len(classes.PanelClasses), classes.PanelSize())
 		must(err)
 		defer pm.Close()
 		dets, derr := pm.Detect(img, *conf, *iou)
@@ -93,7 +93,7 @@ func main() {
 		}
 	}
 
-	model, err := detect.OpenModel(*modelPath, len(names), classes.InputSize)
+	model, err := detect.OpenModel(*modelPath, len(names), classes.DigitSize())
 	must(err)
 	defer model.Close()
 

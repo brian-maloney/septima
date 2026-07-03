@@ -64,12 +64,12 @@ func main() {
 
 	var panel *detect.Model
 	if *panelModel != "" {
-		panel, err = detect.OpenModel(*panelModel, len(classes.PanelClasses), classes.InputSize)
+		panel, err = detect.OpenModel(*panelModel, len(classes.PanelClasses), classes.PanelSize())
 		must(err)
 		defer panel.Close()
 	}
 
-	model, err := detect.OpenModel(filepath.Join(*modelDir, "digits.onnx"), len(names), classes.InputSize)
+	model, err := detect.OpenModel(filepath.Join(*modelDir, "digits.onnx"), len(names), classes.DigitSize())
 	must(err)
 	defer model.Close()
 

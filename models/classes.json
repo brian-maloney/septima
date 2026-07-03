@@ -1,5 +1,7 @@
 {
   "input_size": 640,
+  "panel_input_size": 640,
+  "digit_input_size": 640,
   "panel_classes": [
     "display"
   ],
