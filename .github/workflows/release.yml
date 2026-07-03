@@ -90,7 +90,7 @@ jobs:
         run: |
           cp models/*.onnx models/classes.json dist/models/
           cp README.md LICENSE dist/
-          archive="septima-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz"
+          archive="septima-${GITHUB_REF_NAME}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz"
           tar czf "$archive" -C dist .
           echo "ARCHIVE=$archive" >> "$GITHUB_ENV"
 
