@@ -60,6 +60,7 @@ go test ./internal/...
 SEPTIMA_TEST_ONNX=/path/to/any-yolo-640.onnx go test ./internal/onnx -run TestRunModel -v
 
 go run ./cmd/septima -models models path/to/image.jpg     # needs models/digits.onnx
+go run ./cmd/septima -version                              # prints "dev" outside a tagged release build
 go run ./cmd/septima-bench tanktests                       # exact + per-char accuracy
 ```
 

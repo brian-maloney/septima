@@ -42,18 +42,20 @@ jobs:
       - name: Build binaries
         run: |
           mkdir -p dist
-          go build -o dist/septima ./cmd/septima
-          go build -o dist/septima-bench ./cmd/septima-bench
+          ldflags="-X github.com/brian-maloney/septima.Version=${GITHUB_REF_NAME}"
+          go build -ldflags "$ldflags" -o dist/septima ./cmd/septima
+          go build -ldflags "$ldflags" -o dist/septima-bench ./cmd/septima-bench
 
       - name: Fetch ONNX Runtime shared library
         run: |
           curl -sL -o ort.tgz "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/${{ matrix.ort_asset }}"
           tar xzf ort.tgz
-          cp "${{ matrix.ort_dir }}/lib/${{ matrix.ort_lib }}" dist/
+          mkdir -p dist/models
+          cp "${{ matrix.ort_dir }}/lib/${{ matrix.ort_lib }}" dist/models/
 
       - name: Package archive
         run: |
-          cp -r models dist/models
+          cp models/*.onnx models/classes.json dist/models/
           cp README.md LICENSE dist/
           archive="septima-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz"
           tar czf "$archive" -C dist .

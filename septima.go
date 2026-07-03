@@ -21,6 +21,11 @@ import (
 	"github.com/brian-maloney/septima/internal/imageproc"
 )
 
+// Version is the septima release version. Overridden at build time via
+// -ldflags "-X github.com/brian-maloney/septima.Version=vX.Y.Z"; left as
+// "dev" for local `go build`/`go run`.
+var Version = "dev"
+
 // ReadFile recognizes the display in the image at path.
 func ReadFile(path string, opts ...Option) (Result, error) {
 	f, err := os.Open(path)
@@ -38,6 +43,15 @@ func ReadFile(path string, opts ...Option) (Result, error) {
 // Read recognizes the display in an already-decoded image.
 func Read(img image.Image, opts ...Option) (Result, error) {
 	o := applyOptions(opts)
+
+	if len(o.Pipeline) > 0 {
+		pre, err := o.Pipeline.Apply(img)
+		if err != nil {
+			return Result{}, fmt.Errorf("septima: %w", err)
+		}
+		img = pre
+	}
+
 	modelDir := resolveModelDir(o.ModelDir)
 
 	classes, err := detect.LoadClasses(modelDir)
