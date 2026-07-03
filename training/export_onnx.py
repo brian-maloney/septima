@@ -59,11 +59,15 @@ def main():
 
     # Record the input size so the Go side and classes.json stay in sync. The
     # panel and digit stages can be exported at different sizes, so write the
-    # stage-specific key (panel_input_size / digit_input_size) and leave the
-    # other stage untouched. The legacy shared "input_size" is kept only as a
-    # fallback for readers that predate the per-stage keys.
-    size_key = f"{args.stage}_input_size"
+    # stage-specific key and leave the other stage untouched. The legacy shared
+    # "input_size" is kept only as a fallback for readers that predate the
+    # per-stage keys.  NOTE: the stage is "digits"/"panel" but the classes.json
+    # keys are "digit_input_size"/"panel_input_size" (matching the Go json tags),
+    # so map explicitly rather than interpolating the stage name — f"{stage}_..."
+    # produced the wrong "digits_input_size" key the Go side never reads.
+    size_key = {"digits": "digit_input_size", "panel": "panel_input_size"}[args.stage]
     cfg = json.loads((MODELS / "classes.json").read_text())
+    cfg.pop(f"{args.stage}_input_size", None)  # scrub the bad key from earlier exports
     cfg[size_key] = args.imgsz
     (MODELS / "classes.json").write_text(json.dumps(cfg, indent=2) + "\n")
 
