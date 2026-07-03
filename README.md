@@ -42,6 +42,10 @@ image ─▶ digit detector (YOLO) on full frame ──────────�
 
 ## Building & running (Go)
 
+`models/*.onnx` are tracked via [Git LFS](https://git-lfs.com); install it
+(`brew install git-lfs && git lfs install`) before cloning, or run
+`git lfs pull` after a plain clone.
+
 Inference uses [`onnxruntime_go`](https://github.com/yalue/onnxruntime_go), which
 loads the ONNX Runtime **shared library at runtime** (cgo build; no link-time
 dependency). The engine auto-discovers the library from the Python `onnxruntime`
@@ -75,8 +79,6 @@ Data strategy (priority): public 7-seg YOLO datasets → hand-annotated real ima
 
 ## Status
 
-Milestones tracked in `/Users/vond/.claude/plans/`.
-
 - **M0 scaffold — done.** Pure-Go logic (letterbox, NMS, row assembly) implemented
   and unit-tested.
 - **M1 data — done.** 6,325 digit + 1,501 panel training images (public + synthetic).
@@ -87,3 +89,7 @@ Milestones tracked in `/Users/vond/.claude/plans/`.
   bright-panel crop + fine-tuned digit model. (ML `panel.onnx` deferred to M5.)
 - **M5 generalize to `tests/`** — next: clocks/calculator/pumps need an ML panel
   detector and end-to-end decimals/colons.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
