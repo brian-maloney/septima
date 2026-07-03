@@ -29,22 +29,22 @@
 #   bash scripts/aws_train_combined.sh --no-regen-synth # skip synth regen (use box's copy)
 #
 # Tunables (env vars):
-#   SEPTIMA_IMGSZ    (1280)  training/export image size. 1280 (up from 640) gives
-#                            the head ~4x the pixels on thin '1's, colons and
-#                            distant panels. CRITICAL: the synth is regenerated at
-#                            THIS size (render.py --img-size) so glyphs are drawn at
-#                            native 1280 resolution — the first 1280 run trained on
-#                            640 synth YOLO merely upscaled, which is why it lost
-#                            ~6pp. Costs ~4x activation memory, so batch auto-drops.
-#   SEPTIMA_EPOCHS   (60)    epochs. Doubled from the 640-era 30: at 1280 the head
-#                            re-adapts the glyph scale from the 640 base best.pt and
-#                            needs longer to converge (30 under-trained the 1st run).
-#   SEPTIMA_BATCH    (auto)  default 8 when IMGSZ>=1024 (fits an L4/A10G 24 GB at
-#                            1280), else 32. Set -1 for ultralytics autobatch.
+#   SEPTIMA_IMGSZ    (640)   training/export image size. Default reverted to 640:
+#                            imgsz=1280 was tried TWICE (blurry- and crisp-synth,
+#                            2026-07-02/03) and regressed the held-out bench ~5pp
+#                            each time. Root cause: the real data tops out ~640px
+#                            (median maxdim 640; ~half <640; ~4% >=1280), so 1280
+#                            only upscales real imgs (no new detail) while widening
+#                            the synth/real gap. Do NOT raise this without new,
+#                            genuinely higher-res real data. Kept as an override
+#                            only; if set >=1024 the synth regen + batch adapt.
+#   SEPTIMA_EPOCHS   (30)    epochs.
+#   SEPTIMA_BATCH    (auto)  default 32 at 640; auto-drops to 8 when IMGSZ>=1024
+#                            (memory). Set -1 for ultralytics autobatch.
 #   SEPTIMA_DEVICE   (0)
 #   SEPTIMA_NAME     (digits_combined)
-#   SEPTIMA_CACHE    (ram)   ram=fast (needs LOTS of RAM at 1280 — ~4x vs 640; use
-#                            disk if the box has <64 GB); disk=safe; False=off
+#   SEPTIMA_CACHE    (ram)   ram=fast (needs ~25 GB RAM at 640; far more at 1280 —
+#                            use disk there); disk=safe; False=off
 #   SEPTIMA_DIGITS_SYNTH  (8000)
 #   SEPTIMA_PANELS_SYNTH  (2500)
 #
@@ -56,8 +56,8 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-IMGSZ="${SEPTIMA_IMGSZ:-1280}"
-EPOCHS="${SEPTIMA_EPOCHS:-60}"
+IMGSZ="${SEPTIMA_IMGSZ:-640}"
+EPOCHS="${SEPTIMA_EPOCHS:-30}"
 # Batch scales inversely with resolution: 1280 needs ~4x the memory of 640, so a
 # 24 GB GPU that ran batch 32 at 640 wants batch 8 at 1280. Auto-pick unless the
 # caller pinned SEPTIMA_BATCH.
