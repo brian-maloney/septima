@@ -42,13 +42,6 @@ jobs:
             ort_dir: onnxruntime-win-x64-1.27.0
             ort_asset: onnxruntime-win-x64-1.27.0.zip
             ort_lib: onnxruntime.dll
-          - os: windows-11-arm
-            goos: windows
-            goarch: arm64
-            ext: .exe
-            ort_dir: onnxruntime-win-arm64-1.27.0
-            ort_asset: onnxruntime-win-arm64-1.27.0.zip
-            ort_lib: onnxruntime.dll
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
