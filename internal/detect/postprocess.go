@@ -192,6 +192,40 @@ func SuppressDotsInsideColon(dets []Detection, dotClass, colonClass int) []Detec
 	return out
 }
 
+// SuppressIndicatorMinus removes '-' detections that are round indicator LEDs
+// (power/alarm/AUTO pips beside a display) rather than minus signs. A genuine
+// minus is either drawn as a wide horizontal bar (dash-shaped box) or boxed by
+// the detector with near digit-cell height (both seen across the benchmark's
+// negative readings); an indicator LED is neither — a small near-square blob
+// well below digit height. Only '-' detections failing BOTH signals are
+// dropped: not dash-shaped (w < 1.5h) AND short relative to the row's digits
+// (h < 0.4 × median digit height).
+func SuppressIndicatorMinus(dets []Detection, minusClass, dotClass, colonClass int) []Detection {
+	var hs []int
+	for _, d := range dets {
+		if d.Class != minusClass && d.Class != dotClass && d.Class != colonClass {
+			hs = append(hs, d.Box.Dy())
+		}
+	}
+	if len(hs) == 0 {
+		return dets
+	}
+	sort.Ints(hs)
+	medH := float64(hs[len(hs)/2])
+
+	out := dets[:0:0]
+	for _, d := range dets {
+		if d.Class == minusClass {
+			w, h := float64(d.Box.Dx()), float64(d.Box.Dy())
+			if w < 1.5*h && h < 0.4*medH {
+				continue
+			}
+		}
+		out = append(out, d)
+	}
+	return out
+}
+
 // dotInColonStack reports whether a dot box is part of a colon's vertical stack:
 // its center-x falls within a colon box and its center-y is within one
 // colon-height above or below that box.

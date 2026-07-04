@@ -185,11 +185,20 @@ func finalizeReading(dets []detect.Detection, classes detect.Classes) assemble.R
 	// nested in a wider one).
 	dets = detect.DedupeAcrossClasses(dets, 0.5)
 
+	dot, col := classIndex(classes.DigitClasses, '.'), classIndex(classes.DigitClasses, ':')
+
+	// A round indicator LED beside a display (power/alarm/AUTO pip) is commonly
+	// misread as a leading '-', which survives assembly because leading minus is
+	// kept for negative readings — drop such non-minus-shaped '-' boxes first.
+	if minus := classIndex(classes.DigitClasses, '-'); minus >= 0 {
+		dets = detect.SuppressIndicatorMinus(dets, minus, dot, col)
+	}
+
 	// A colon is two stacked dots the detector often reports as two decimals —
 	// merge such pairs back into a single ':'. Then drop any stray '.' the
 	// colon-trained model fires inside a ':' box (which would read "2:47" as
 	// "2:.47").
-	if dot, col := classIndex(classes.DigitClasses, '.'), classIndex(classes.DigitClasses, ':'); dot >= 0 && col >= 0 {
+	if dot >= 0 && col >= 0 {
 		dets = detect.MergeColonDots(dets, dot, col)
 		dets = detect.SuppressDotsInsideColon(dets, dot, col)
 	}

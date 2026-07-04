@@ -172,8 +172,13 @@ func filterPunct(dets []detect.Detection, punct map[int]bool, t float64) []detec
 
 func finalize(dets []detect.Detection, classes detect.Classes) assemble.Reading {
 	dets = detect.DedupeAcrossClasses(dets, 0.5)
-	if dot, col := classIndex(classes.DigitClasses, '.'), classIndex(classes.DigitClasses, ':'); dot >= 0 && col >= 0 {
+	dot, col := classIndex(classes.DigitClasses, '.'), classIndex(classes.DigitClasses, ':')
+	if minus := classIndex(classes.DigitClasses, '-'); minus >= 0 {
+		dets = detect.SuppressIndicatorMinus(dets, minus, dot, col)
+	}
+	if dot >= 0 && col >= 0 {
 		dets = detect.MergeColonDots(dets, dot, col)
+		dets = detect.SuppressDotsInsideColon(dets, dot, col)
 	}
 	return assemble.Assemble(dets, classes.DigitClasses)
 }
