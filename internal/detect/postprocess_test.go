@@ -161,6 +161,68 @@ func TestSuppressDotsInsideColon(t *testing.T) {
 	}
 }
 
+func TestSuppressIndicatorMinusDropsRoundLED(t *testing.T) {
+	const dot, colon, minus = 10, 11, 12
+	// Clock-radio geometry: the round "AUTO." indicator LED left of the digits
+	// fires as a near-square '-' (48x49) while the digits are ~170px tall ->
+	// dropped, so "12:17" is not read as "-12:17". Digits untouched.
+	dets := []Detection{
+		{Class: minus, Score: 0.77, Box: image.Rect(497, 677, 545, 726)}, // 48x49 LED blob -> drop
+		{Class: 1, Score: 0.80, Box: image.Rect(617, 583, 675, 739)},
+		{Class: 2, Score: 0.91, Box: image.Rect(685, 582, 808, 758)},
+		{Class: colon, Score: 0.65, Box: image.Rect(823, 617, 888, 749)},
+		{Class: 1, Score: 0.81, Box: image.Rect(974, 620, 1037, 776)},
+		{Class: 7, Score: 0.88, Box: image.Rect(1080, 619, 1179, 792)},
+	}
+	got := SuppressIndicatorMinus(dets, minus, dot, colon)
+	if len(got) != len(dets)-1 {
+		t.Fatalf("expected only the LED '-' dropped, got %d of %d detections", len(got), len(dets))
+	}
+	for _, d := range got {
+		if d.Class == minus {
+			t.Fatalf("round indicator '-' should have been suppressed")
+		}
+	}
+}
+
+func TestSuppressIndicatorMinusKeepsRealMinuses(t *testing.T) {
+	const dot, colon, minus = 10, 11, 12
+	// Real minus geometries from the held-out benchmark: the detector boxes a
+	// genuine minus either dash-shaped (wide, short) or with near digit-cell
+	// height (sloppy near-square/tall boxes on tiny crops). All must survive.
+	cases := []struct {
+		name  string
+		box   image.Rectangle // '-' box
+		digit image.Rectangle // representative digit in the same row
+	}{
+		{"dash-shaped", image.Rect(12, 24, 32, 28), image.Rect(38, 12, 50, 40)},        // 20x4 vs h28
+		{"square digit-height", image.Rect(101, 16, 119, 35), image.Rect(122, 11, 142, 39)}, // 18x19 vs h28
+		{"tall sloppy box", image.Rect(344, 31, 390, 117), image.Rect(259, 22, 321, 128)},   // 46x86 vs h106
+		{"square tiny crop", image.Rect(16, 25, 26, 36), image.Rect(28, 21, 39, 40)},        // 10x11 vs h19
+	}
+	for _, c := range cases {
+		dets := []Detection{
+			{Class: minus, Score: 0.8, Box: c.box},
+			{Class: 5, Score: 0.9, Box: c.digit},
+		}
+		if got := SuppressIndicatorMinus(dets, minus, dot, colon); len(got) != 2 {
+			t.Errorf("%s: real '-' was wrongly suppressed", c.name)
+		}
+	}
+}
+
+func TestSuppressIndicatorMinusNoDigitsKeepsAll(t *testing.T) {
+	const dot, colon, minus = 10, 11, 12
+	// Without any digit boxes there is no height reference — keep everything.
+	dets := []Detection{
+		{Class: minus, Score: 0.8, Box: image.Rect(0, 0, 10, 10)},
+		{Class: dot, Score: 0.6, Box: image.Rect(20, 5, 25, 10)},
+	}
+	if got := SuppressIndicatorMinus(dets, minus, dot, colon); len(got) != 2 {
+		t.Fatalf("with no digits present all detections must survive, got %d", len(got))
+	}
+}
+
 func TestMergeColonDotsKeepsSeparateRowsDecimals(t *testing.T) {
 	const dot, colon = 10, 11
 	// Two decimals a full row apart (different rows of a gas pump) must NOT merge.
