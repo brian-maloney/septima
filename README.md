@@ -34,24 +34,31 @@ image ─▶ digit detector (YOLO) on full frame ──────────�
 | `internal/imageproc` | Letterbox, CHW tensor, crop (pure Go, no OpenCV) |
 | `internal/detect` | YOLO decode + NMS, panel/digit model wrappers |
 | `internal/assemble` | Row clustering, left-to-right read, string build |
-| `models/` | `panel.onnx`, `digits.onnx`, `classes.json` |
-| `cmd/septima` | CLI: read one image |
+| `internal/ortlib` | Embedded per-platform ONNX Runtime shared libraries |
+| `models/` | `panel.onnx`, `digits.onnx`, `classes.json` — also embedded into `cmd/septima` |
+| `cmd/septima` | CLI: read one image (self-contained; no `models/` dir or `SEPTIMA_ORT_LIB` needed) |
 | `cmd/septima-bench` | Eval against a dir's `ground_truth.json` |
 | `training/` | Python (Ultralytics) data prep, training, ONNX export |
 | `tests/`, `tanktests/` | Fixtures + ground truth (tanktests = primary use case) |
 
 ## Building & running (Go)
 
-`models/*.onnx` are tracked via [Git LFS](https://git-lfs.com); install it
-(`brew install git-lfs && git lfs install`) before cloning, or run
-`git lfs pull` after a plain clone.
+`models/*.onnx` and `internal/ortlib/lib/*` are tracked via
+[Git LFS](https://git-lfs.com); install it (`brew install git-lfs && git lfs
+install`) before cloning, or run `git lfs pull` after a plain clone.
 
 Inference uses [`onnxruntime_go`](https://github.com/yalue/onnxruntime_go), which
 loads the ONNX Runtime **shared library at runtime** (cgo build; no link-time
-dependency). The engine auto-discovers the library from the Python `onnxruntime`
-wheel in `training/.venv` (or a copy under `models/`), walking up from the working
-directory. Override explicitly with `SEPTIMA_ORT_LIB=/path/to/libonnxruntime.dylib`.
-CPU works everywhere; CoreML/CUDA optional.
+dependency). `cmd/septima` embeds both the panel/digit ONNX models and the
+platform's ONNX Runtime shared library via `go:embed` (see `models/embed.go` and
+`internal/ortlib`), so the built binary is self-contained — no `models/` directory
+or `SEPTIMA_ORT_LIB` needed at runtime. Every other `cmd/` tool (`septima-bench`
+etc.) still resolves models/ORT from disk as before: the engine auto-discovers the
+library from the Python `onnxruntime` wheel in `training/.venv` (or a copy under
+`models/`), walking up from the working directory. Override explicitly with
+`SEPTIMA_ORT_LIB=/path/to/libonnxruntime.dylib` and/or `-models DIR` /
+`SEPTIMA_MODEL_DIR`, which take precedence over the embedded defaults too. CPU
+works everywhere; CoreML/CUDA optional.
 
 ```sh
 go build ./...
@@ -59,7 +66,8 @@ go test ./internal/...
 # opt-in ORT runtime smoke test (load → run → output shape):
 SEPTIMA_TEST_ONNX=/path/to/any-yolo-640.onnx go test ./internal/onnx -run TestRunModel -v
 
-go run ./cmd/septima -models models path/to/image.jpg     # needs models/digits.onnx
+go run ./cmd/septima path/to/image.jpg                     # self-contained, no flags needed
+go run ./cmd/septima -models models path/to/image.jpg      # override with a different models dir
 go run ./cmd/septima -version                              # prints "dev" outside a tagged release build
 go run ./cmd/septima-bench tanktests                       # exact + per-char accuracy
 ```

@@ -52,12 +52,22 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Build binaries
+      - name: Build septima (self-contained, embedded models + ONNX Runtime)
+        shell: bash
+        run: |
+          ldflags="-X github.com/brian-maloney/septima.Version=${GITHUB_REF_NAME}"
+          go build -ldflags "$ldflags" -o "septima-${GITHUB_REF_NAME}-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}" ./cmd/septima
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: septima-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: septima-${{ github.ref_name }}-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}
+
+      - name: Build septima-bench
         shell: bash
         run: |
           mkdir -p dist
           ldflags="-X github.com/brian-maloney/septima.Version=${GITHUB_REF_NAME}"
-          go build -ldflags "$ldflags" -o "dist/septima${{ matrix.ext }}" ./cmd/septima
           go build -ldflags "$ldflags" -o "dist/septima-bench${{ matrix.ext }}" ./cmd/septima-bench
 
       - name: Fetch ONNX Runtime shared library (Unix)
@@ -78,18 +88,18 @@ jobs:
           New-Item -ItemType Directory -Force -Path dist/models | Out-Null
           Copy-Item "${{ matrix.ort_dir }}/lib/${{ matrix.ort_lib }}" dist/models/
 
-      - name: Package archive
+      - name: Package septima-bench archive
         shell: bash
         run: |
           cp models/*.onnx models/classes.json dist/models/
           cp README.md LICENSE dist/
-          archive="septima-${GITHUB_REF_NAME}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz"
+          archive="septima-bench-${GITHUB_REF_NAME}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz"
           tar czf "$archive" -C dist .
           echo "ARCHIVE=$archive" >> "$GITHUB_ENV"
 
       - uses: actions/upload-artifact@v7
         with:
-          name: septima-${{ matrix.goos }}-${{ matrix.goarch }}
+          name: septima-bench-${{ matrix.goos }}-${{ matrix.goarch }}
           path: ${{ env.ARCHIVE }}
 
   release:
@@ -100,8 +110,16 @@ jobs:
         with:
           path: artifacts
 
+      - name: Restore executable bit
+        shell: bash
+        # Bare (non-tarball) binaries can lose their executable bit across the
+        # upload-artifact/download-artifact round-trip; tarballs are unaffected.
+        run: find artifacts -type f -name 'septima-*' ! -name '*.tar.gz' -exec chmod +x {} +
+
       - name: Create release
         uses: softprops/action-gh-release@v3
         with:
-          files: artifacts/*/*.tar.gz
+          files: |
+            artifacts/*/*.tar.gz
+            artifacts/*/septima-*
           generate_release_notes: true

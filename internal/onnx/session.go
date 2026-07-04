@@ -17,6 +17,20 @@ import (
 	ort "github.com/yalue/onnxruntime_go"
 )
 
+// embeddedLibSource, when set, supplies an embedded ONNX Runtime shared
+// library to fall back on when locateORT finds nothing on disk. nil by
+// default: internal/onnx has zero import-time dependency on internal/ortlib.
+// cmd/septima's main() calls SetEmbeddedLibSource, closing over
+// ortlib.Bytes/ortlib.Filename/ortlib.Available().
+var embeddedLibSource func() (data []byte, filename string, ok bool)
+
+// SetEmbeddedLibSource registers a fallback source of ONNX Runtime shared
+// library bytes, used only when SEPTIMA_ORT_LIB is unset and no library is
+// found on disk. Must be called before the first model is opened.
+func SetEmbeddedLibSource(f func() (data []byte, filename string, ok bool)) {
+	embeddedLibSource = f
+}
+
 // Default input/output tensor names produced by Ultralytics YOLO ONNX export.
 const (
 	defaultInputName  = "images"
@@ -30,12 +44,62 @@ var (
 
 func ensureInit() error {
 	initOnce.Do(func() {
-		if p := locateORT(); p != "" {
+		p := locateORT()
+		if p == "" && embeddedLibSource != nil {
+			if data, filename, ok := embeddedLibSource(); ok {
+				extracted, err := extractEmbeddedLib(data, filename)
+				if err != nil {
+					initErr = fmt.Errorf("extract embedded onnxruntime library: %w", err)
+					return
+				}
+				p = extracted
+			}
+		}
+		if p != "" {
 			ort.SetSharedLibraryPath(p)
 		}
 		initErr = ort.InitializeEnvironment()
 	})
 	return initErr
+}
+
+// extractEmbeddedLib writes data to a stable per-machine cache path, skipping
+// the write if a file of the right size is already there (extraction happens
+// once per machine, not once per invocation). Writes via temp-file-then-
+// rename for atomicity. No execute bit is needed: dlopen/LoadLibrary only
+// require read access.
+func extractEmbeddedLib(data []byte, filename string) (string, error) {
+	dir, err := os.UserCacheDir()
+	if err != nil || dir == "" {
+		dir = os.TempDir()
+	}
+	dir = filepath.Join(dir, "septima", "ortlib")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	dest := filepath.Join(dir, filename)
+	if info, err := os.Stat(dest); err == nil && info.Size() == int64(len(data)) {
+		return dest, nil
+	}
+	tmp, err := os.CreateTemp(dir, filename+".tmp*")
+	if err != nil {
+		return "", err
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return "", err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpPath)
+		return "", err
+	}
+	if err := os.Rename(tmpPath, dest); err != nil {
+		os.Remove(tmpPath)
+		return "", err
+	}
+	return dest, nil
 }
 
 // locateORT resolves the ONNX Runtime shared library path. SEPTIMA_ORT_LIB wins;
@@ -99,6 +163,18 @@ func Open(path string) (Session, error) {
 	s, err := ort.NewDynamicAdvancedSession(path, []string{defaultInputName}, []string{defaultOutputName}, nil)
 	if err != nil {
 		return nil, fmt.Errorf("open model %s: %w", path, err)
+	}
+	return &session{s: s}, nil
+}
+
+// OpenFromBytes loads an ONNX model from in-memory data, e.g. a go:embed'd model.
+func OpenFromBytes(data []byte) (Session, error) {
+	if err := ensureInit(); err != nil {
+		return nil, fmt.Errorf("init onnxruntime (set SEPTIMA_ORT_LIB to the libonnxruntime path): %w", err)
+	}
+	s, err := ort.NewDynamicAdvancedSessionWithONNXData(data, []string{defaultInputName}, []string{defaultOutputName}, nil)
+	if err != nil {
+		return nil, fmt.Errorf("open embedded model: %w", err)
 	}
 	return &session{s: s}, nil
 }

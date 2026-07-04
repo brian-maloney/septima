@@ -54,12 +54,24 @@ func Read(img image.Image, opts ...Option) (Result, error) {
 
 	modelDir := resolveModelDir(o.ModelDir)
 
-	classes, err := detect.LoadClasses(modelDir)
-	if err != nil {
-		return Result{}, fmt.Errorf("septima: %w", err)
+	var (
+		classes detect.Classes
+		digits  *detect.Model
+		err     error
+	)
+	if o.useEmbeddedModels() {
+		classes, err = detect.ParseClasses(o.embeddedModels.classesJSON)
+		if err != nil {
+			return Result{}, fmt.Errorf("septima: %w", err)
+		}
+		digits, err = detect.OpenModelFromBytes(o.embeddedModels.digitsONNX, len(classes.DigitClasses), classes.DigitSize())
+	} else {
+		classes, err = detect.LoadClasses(modelDir)
+		if err != nil {
+			return Result{}, fmt.Errorf("septima: %w", err)
+		}
+		digits, err = detect.OpenModel(modelPath(modelDir, "digits.onnx"), len(classes.DigitClasses), classes.DigitSize())
 	}
-
-	digits, err := detect.OpenModel(modelPath(modelDir, "digits.onnx"), len(classes.DigitClasses), classes.DigitSize())
 	if err != nil {
 		return Result{}, fmt.Errorf("septima: open digit model: %w", err)
 	}
@@ -220,7 +232,16 @@ func toResult(r assemble.Reading) Result {
 // locatePanel finds the display region: the trained panel.onnx if available and
 // it detects something, else the classical bright-panel heuristic.
 func locatePanel(img image.Image, modelDir string, classes detect.Classes, o Options) (image.Rectangle, bool) {
-	if panel, err := detect.OpenModel(modelPath(modelDir, "panel.onnx"), len(classes.PanelClasses), classes.PanelSize()); err == nil {
+	var (
+		panel *detect.Model
+		err   error
+	)
+	if o.useEmbeddedModels() {
+		panel, err = detect.OpenModelFromBytes(o.embeddedModels.panelONNX, len(classes.PanelClasses), classes.PanelSize())
+	} else {
+		panel, err = detect.OpenModel(modelPath(modelDir, "panel.onnx"), len(classes.PanelClasses), classes.PanelSize())
+	}
+	if err == nil {
 		defer panel.Close()
 		if dets, derr := panel.Detect(img, o.ConfThreshold, o.IOUThreshold); derr == nil && len(dets) > 0 {
 			return bestDetection(dets).Box, true
@@ -291,6 +312,14 @@ func classIndex(names []string, r rune) int {
 func bestDetection(dets []detect.Detection) detect.Detection {
 	sort.Slice(dets, func(i, j int) bool { return dets[i].Score > dets[j].Score })
 	return dets[0]
+}
+
+// useEmbeddedModels reports whether Read should use the in-memory models
+// supplied via WithEmbeddedModels rather than reading from ModelDir. An
+// explicit ModelDir or SEPTIMA_MODEL_DIR always wins, matching
+// resolveModelDir's precedence.
+func (o Options) useEmbeddedModels() bool {
+	return o.embeddedModels != nil && o.ModelDir == "" && os.Getenv("SEPTIMA_MODEL_DIR") == ""
 }
 
 func resolveModelDir(opt string) string {
