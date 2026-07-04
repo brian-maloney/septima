@@ -101,4 +101,6 @@ Data strategy (priority): public 7-seg YOLO datasets → hand-annotated real ima
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE). `cmd/septima` embeds ONNX Runtime (MIT,
+© Microsoft Corporation) and its bundled third-party components — see
+[NOTICE.md](NOTICE.md) for attribution.
