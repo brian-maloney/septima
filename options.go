@@ -42,6 +42,15 @@ type Options struct {
 	// operations (crop, rotate, threshold, ...) applied to the input image,
 	// in order, before detection.
 	Pipeline preprocess.Pipeline
+
+	// embeddedModels, when set, supplies in-memory panel/digit ONNX bytes and
+	// classes.json instead of reading files from ModelDir. See WithEmbeddedModels.
+	embeddedModels *embeddedModelSource
+}
+
+// embeddedModelSource holds in-memory model data supplied via WithEmbeddedModels.
+type embeddedModelSource struct {
+	panelONNX, digitsONNX, classesJSON []byte
 }
 
 func defaultOptions() Options {
@@ -90,6 +99,17 @@ func WithSkipPanel(b bool) Option { return func(o *Options) { o.SkipPanel = b } 
 // detection. Repeated calls append rather than replace.
 func WithPipeline(ops ...preprocess.Op) Option {
 	return func(o *Options) { o.Pipeline = append(o.Pipeline, ops...) }
+}
+
+// WithEmbeddedModels supplies in-memory panel/digit ONNX bytes and
+// classes.json to use instead of reading files from ModelDir. Used by
+// cmd/septima to wire in its go:embed'd defaults; an explicit WithModelDir
+// or SEPTIMA_MODEL_DIR still always wins, matching resolveModelDir's
+// existing precedence.
+func WithEmbeddedModels(panelONNX, digitsONNX, classesJSON []byte) Option {
+	return func(o *Options) {
+		o.embeddedModels = &embeddedModelSource{panelONNX, digitsONNX, classesJSON}
+	}
 }
 
 func applyOptions(opts []Option) Options {

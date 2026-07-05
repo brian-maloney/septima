@@ -54,11 +54,17 @@ func resolveInputSize(stage, shared int) int {
 
 // LoadClasses reads classes.json from modelDir.
 func LoadClasses(modelDir string) (Classes, error) {
-	var c Classes
 	data, err := os.ReadFile(filepath.Join(modelDir, "classes.json"))
 	if err != nil {
-		return c, fmt.Errorf("load classes.json: %w", err)
+		return Classes{}, fmt.Errorf("load classes.json: %w", err)
 	}
+	return ParseClasses(data)
+}
+
+// ParseClasses unmarshals classes.json contents already read into memory
+// (e.g. a go:embed'd classes.json), sharing LoadClasses's JSON schema.
+func ParseClasses(data []byte) (Classes, error) {
+	var c Classes
 	if err := json.Unmarshal(data, &c); err != nil {
 		return c, fmt.Errorf("parse classes.json: %w", err)
 	}
@@ -76,6 +82,16 @@ type Model struct {
 // given square input size.
 func OpenModel(path string, numClasses, inputSize int) (*Model, error) {
 	sess, err := onnx.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	return &Model{session: sess, numClass: numClasses, inputSize: inputSize}, nil
+}
+
+// OpenModelFromBytes loads an ONNX detection model from in-memory data (e.g. a
+// go:embed'd model) expecting numClasses classes at the given square input size.
+func OpenModelFromBytes(data []byte, numClasses, inputSize int) (*Model, error) {
+	sess, err := onnx.OpenFromBytes(data)
 	if err != nil {
 		return nil, err
 	}

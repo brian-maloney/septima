@@ -10,6 +10,9 @@ import (
 	"strings"
 
 	"github.com/brian-maloney/septima"
+	"github.com/brian-maloney/septima/internal/onnx"
+	"github.com/brian-maloney/septima/internal/ortlib"
+	"github.com/brian-maloney/septima/models"
 	"github.com/brian-maloney/septima/preprocess"
 )
 
@@ -136,7 +139,15 @@ func run(args []string) error {
 		return fmt.Errorf("no image file specified")
 	}
 
+	if err := models.Verify(); err != nil {
+		return err
+	}
+	onnx.SetEmbeddedLibSource(func() ([]byte, string, bool) {
+		return ortlib.Bytes, ortlib.Filename, ortlib.Available()
+	})
+
 	opts = append(opts, septima.WithConfThreshold(conf))
+	opts = append(opts, septima.WithEmbeddedModels(models.PanelONNX, models.DigitsONNX, models.ClassesJSON))
 	if modelDir != "" {
 		opts = append(opts, septima.WithModelDir(modelDir))
 	}
@@ -171,6 +182,7 @@ func printUsage() {
 
 Flags:
   -models DIR       directory containing panel.onnx, digits.onnx, classes.json
+                    (optional — omit to use this binary's built-in models)
   -profile NAME     display-type hint (e.g. tank_gauge)
   -conf N           detection confidence threshold (default 0.25)
   -skip-panel       bypass stage-1 panel localization (use when IMAGE is
