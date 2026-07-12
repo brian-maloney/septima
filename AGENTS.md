@@ -53,8 +53,15 @@ strict is the honest end-to-end number. Report both when comparing runs.
   when a run regresses, and regressions are common enough that you'll want
   to isolate the cause.
 - Back up the pre-retrain `models/digits.onnx` (e.g. to `/tmp/`) before
-  swapping in a new one, and `git checkout models/digits.onnx` reverts
-  cleanly if a run regresses `tests/` or the benchmark.
+  swapping in a new one. `models/*.onnx` is no longer git-tracked (fetched by
+  `scripts/fetch-models.sh`, pinned in `models/MODELS_VERSION`), so
+  `git checkout` won't revert it — either restore your `/tmp/` backup, or
+  delete the local file and re-run `scripts/fetch-models.sh` to pull the
+  last-published version back down.
+- Once a retrain passes the full verification loop above, publish it with
+  `scripts/publish-models.sh` (creates a new `models-vN` release and
+  rewrites `models/MODELS_VERSION`) and commit the updated pin file — see
+  "Model weights" in `README.md`.
 
 ## Dead ends (don't re-try without new information)
 
@@ -106,6 +113,11 @@ strict is the honest end-to-end number. Report both when comparing runs.
   core ops only, not ssocr's full flag surface — the old GoCV versions of the
   rest (shear, morphology, CLAHE, etc.) are in `old/preprocess/*.go` for
   reference if ever extended.
-- `models/*.onnx` are tracked via Git LFS — `git lfs install` before cloning,
-  or `git lfs pull` after a plain clone, or the models will silently be
-  pointer files.
+- `models/*.onnx` and `internal/ortlib/lib/*` are **not** tracked in git —
+  they're fetched by `scripts/fetch-models.sh` / `scripts/fetch-ortlib.sh`
+  (models pinned by tag+sha256 in `models/MODELS_VERSION`, ORT lib pulled
+  straight from the upstream onnxruntime GitHub release). Run both before
+  `go build`/`go test` on a fresh clone, or the build will fail (models) or
+  `go:embed` will fail (ORT lib on the platforms it's embedded for). This
+  replaced Git LFS, which was burning the free GitHub LFS bandwidth quota on
+  every CI checkout.

@@ -6,20 +6,22 @@ on:
   pull_request:
     branches: [main]
 
-env:
-  ONNXRUNTIME_VERSION: "1.27.0"
-
 jobs:
   build-test:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
-        with:
-          lfs: true
 
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+
+      - name: Fetch ONNX Runtime library
+        id: ortlib
+        run: echo "path=$(scripts/fetch-ortlib.sh)" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch model weights
+        run: scripts/fetch-models.sh
 
       - name: Build
         run: go build ./...
@@ -27,11 +29,7 @@ jobs:
       - name: Vet
         run: go vet ./...
 
-      - name: Fetch ONNX Runtime shared library
-        run: |
-          curl -sL -o ort.tgz "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-osx-arm64-${ONNXRUNTIME_VERSION}.tgz"
-          tar xzf ort.tgz
-          echo "SEPTIMA_ORT_LIB=$PWD/onnxruntime-osx-arm64-${ONNXRUNTIME_VERSION}/lib/libonnxruntime.${ONNXRUNTIME_VERSION}.dylib" >> "$GITHUB_ENV"
-
       - name: Test
         run: go test ./...
+        env:
+          SEPTIMA_ORT_LIB: ${{ steps.ortlib.outputs.path }}

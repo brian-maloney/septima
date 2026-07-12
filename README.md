@@ -34,8 +34,9 @@ image ─▶ digit detector (YOLO) on full frame ──────────�
 | `internal/imageproc` | Letterbox, CHW tensor, crop (pure Go, no OpenCV) |
 | `internal/detect` | YOLO decode + NMS, panel/digit model wrappers |
 | `internal/assemble` | Row clustering, left-to-right read, string build |
-| `internal/ortlib` | Embedded per-platform ONNX Runtime shared libraries |
-| `models/` | `panel.onnx`, `digits.onnx`, `classes.json` — also embedded into `cmd/septima` |
+| `internal/ortlib` | Embedded per-platform ONNX Runtime shared library (fetched, not tracked — see `scripts/fetch-ortlib.sh`) |
+| `models/` | `classes.json` (tracked) + `panel.onnx`/`digits.onnx` (fetched, not tracked — see "Model weights") — also embedded into `cmd/septima` |
+| `scripts/fetch-models.sh`, `scripts/fetch-ortlib.sh`, `scripts/publish-models.sh` | Fetch/publish the model weights and ONNX Runtime lib (see "Model weights") |
 | `cmd/septima` | CLI: read one image (self-contained; no `models/` dir or `SEPTIMA_ORT_LIB` needed) |
 | `cmd/septima-bench` | Eval against a dir's `ground_truth.json` |
 | `training/` | Python (Ultralytics) data prep, training, ONNX export |
@@ -43,9 +44,20 @@ image ─▶ digit detector (YOLO) on full frame ──────────�
 
 ## Building & running (Go)
 
-`models/*.onnx` and `internal/ortlib/lib/*` are tracked via
-[Git LFS](https://git-lfs.com); install it (`brew install git-lfs && git lfs
-install`) before cloning, or run `git lfs pull` after a plain clone.
+`models/*.onnx` (trained weights) and `internal/ortlib/lib/*` (the ONNX
+Runtime shared library) aren't checked into git — they're fetched on demand:
+
+```sh
+scripts/fetch-models.sh   # models/panel.onnx, models/digits.onnx — from the
+                           # GitHub release pinned in models/MODELS_VERSION
+scripts/fetch-ortlib.sh   # ONNX Runtime shared lib for the host platform —
+                           # from the upstream onnxruntime GitHub release
+```
+
+Run both before `go build`/`go test`; CI does the same (see
+`.github/workflows/`). Model weights are versioned independently of the
+software (retraining doesn't imply a new software release) — see "Model
+weights" below for how that's tracked and how to publish a retrain.
 
 Inference uses [`onnxruntime_go`](https://github.com/yalue/onnxruntime_go), which
 loads the ONNX Runtime **shared library at runtime** (cgo build; no link-time
@@ -71,6 +83,35 @@ go run ./cmd/septima -models models path/to/image.jpg      # override with a dif
 go run ./cmd/septima -version                              # prints "dev" outside a tagged release build
 go run ./cmd/septima-bench tanktests                       # exact + per-char accuracy
 ```
+
+## Model weights
+
+`models/panel.onnx` and `models/digits.onnx` are published as GitHub release
+assets, separately from the software's `vX.Y.Z` tags — retraining doesn't
+imply a new software release. `models/MODELS_VERSION` pins the release tag
+and a sha256 per file:
+
+```
+TAG=models-v1
+digits.onnx=sha256:...
+panel.onnx=sha256:...
+```
+
+`scripts/fetch-models.sh` reads that pin, downloads from
+`github.com/brian-maloney/septima/releases/download/<TAG>/<file>`, and
+verifies the checksum; it no-ops if the on-disk file already matches. After a
+retrain that passes the verification loop in `AGENTS.md`, publish it with:
+
+```sh
+scripts/publish-models.sh [--notes-file FILE]
+```
+
+This creates the next `models-vN` release, uploads the two `.onnx` files, and
+rewrites `models/MODELS_VERSION` with the new tag/checksums — review and
+commit that file (and `models/classes.json`, if the class list changed) as
+one commit. `models/classes.json` itself stays tracked directly in git (it's
+a small text file, not a build artifact), so keep it in sync with whichever
+model version is pinned.
 
 ## Training (Python, offline)
 

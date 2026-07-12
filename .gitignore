@@ -12,7 +12,12 @@ __pycache__/
 *.pt
 *.pth
 
-# Keep models/*.onnx and models/classes.json tracked.
+# Model weights and the embedded ONNX Runtime shared library are fetched by
+# scripts/fetch-models.sh / scripts/fetch-ortlib.sh (see models/MODELS_VERSION),
+# not tracked in git. Keep models/classes.json tracked — it's a small text
+# file, not a build artifact.
+/models/*.onnx
+/internal/ortlib/lib/*
 
 # Built command binaries (go build drops these in the repo root)
 /septima
