@@ -1,0 +1,2 @@
+*.sh text eol=lf
+models/MODELS_VERSION text eol=lf
