@@ -3,7 +3,7 @@
 #   python3 -m venv training/.venv && source training/.venv/bin/activate
 #   pip install -r training/requirements.txt
 ultralytics>=8.4.87
-onnx>=1.16.0
+onnx>=1.22.0
 onnxruntime>=1.18.0
 opencv-python-headless>=5.0.0.93
 pillow>=12.3.0
