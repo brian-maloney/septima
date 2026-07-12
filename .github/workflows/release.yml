@@ -5,9 +5,6 @@ on:
     tags:
       - "v*"
 
-env:
-  ONNXRUNTIME_VERSION: "1.27.0"
-
 permissions:
   contents: write
 
@@ -20,37 +17,31 @@ jobs:
           - os: macos-latest
             goos: darwin
             goarch: arm64
-            ort_dir: onnxruntime-osx-arm64-1.27.0
-            ort_asset: onnxruntime-osx-arm64-1.27.0.tgz
-            ort_lib: libonnxruntime.1.27.0.dylib
           - os: ubuntu-latest
             goos: linux
             goarch: x64
-            ort_dir: onnxruntime-linux-x64-1.27.0
-            ort_asset: onnxruntime-linux-x64-1.27.0.tgz
-            ort_lib: libonnxruntime.so.1.27.0
           - os: ubuntu-24.04-arm
             goos: linux
             goarch: arm64
-            ort_dir: onnxruntime-linux-aarch64-1.27.0
-            ort_asset: onnxruntime-linux-aarch64-1.27.0.tgz
-            ort_lib: libonnxruntime.so.1.27.0
           - os: windows-latest
             goos: windows
             goarch: x64
             ext: .exe
-            ort_dir: onnxruntime-win-x64-1.27.0
-            ort_asset: onnxruntime-win-x64-1.27.0.zip
-            ort_lib: onnxruntime.dll
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
-        with:
-          lfs: true
 
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+
+      - name: Fetch ONNX Runtime library
+        shell: bash
+        run: scripts/fetch-ortlib.sh
+
+      - name: Fetch model weights
+        shell: bash
+        run: scripts/fetch-models.sh
 
       - name: Build septima (self-contained, embedded models + ONNX Runtime)
         shell: bash
@@ -70,27 +61,11 @@ jobs:
           ldflags="-X github.com/brian-maloney/septima.Version=${GITHUB_REF_NAME}"
           go build -ldflags "$ldflags" -o "dist/septima-bench${{ matrix.ext }}" ./cmd/septima-bench
 
-      - name: Fetch ONNX Runtime shared library (Unix)
-        if: runner.os != 'Windows'
-        shell: bash
-        run: |
-          curl -sL -o ort.tgz "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/${{ matrix.ort_asset }}"
-          tar xzf ort.tgz
-          mkdir -p dist/models
-          cp "${{ matrix.ort_dir }}/lib/${{ matrix.ort_lib }}" dist/models/
-
-      - name: Fetch ONNX Runtime shared library (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          curl.exe -sL -o ort.zip "https://github.com/microsoft/onnxruntime/releases/download/v${env:ONNXRUNTIME_VERSION}/${{ matrix.ort_asset }}"
-          Expand-Archive -Path ort.zip -DestinationPath .
-          New-Item -ItemType Directory -Force -Path dist/models | Out-Null
-          Copy-Item "${{ matrix.ort_dir }}/lib/${{ matrix.ort_lib }}" dist/models/
-
       - name: Package septima-bench archive
         shell: bash
         run: |
+          mkdir -p dist/models
+          cp internal/ortlib/lib/* dist/models/
           cp models/*.onnx models/classes.json dist/models/
           cp README.md LICENSE dist/
           archive="septima-bench-${GITHUB_REF_NAME}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz"
