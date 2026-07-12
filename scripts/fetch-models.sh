@@ -18,7 +18,7 @@ if [[ ! -f "$pin_file" ]]; then
   exit 1
 fi
 
-tag="$(grep '^TAG=' "$pin_file" | cut -d= -f2)"
+tag="$(grep '^TAG=' "$pin_file" | tr -d '\r' | cut -d= -f2)"
 if [[ -z "$tag" ]]; then
   echo "fetch-models: no TAG= line in $pin_file" >&2
   exit 1
@@ -59,4 +59,4 @@ fetch_one() {
 while IFS='=' read -r name checksum; do
   [[ -z "$name" || "$name" == "TAG" || "$name" == \#* ]] && continue
   fetch_one "$name" "$checksum"
-done < "$pin_file"
+done < <(tr -d '\r' < "$pin_file")
