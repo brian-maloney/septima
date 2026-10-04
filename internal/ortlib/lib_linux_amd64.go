@@ -2,10 +2,10 @@ package ortlib
 
 import _ "embed"
 
-//go:embed lib/libonnxruntime-linux-amd64-1.28.0.so
+//go:embed lib/libonnxruntime-linux-amd64-1.29.0.so
 var Bytes []byte
 
 // Filename is the name the embedded bytes are extracted to on disk. It bakes
 // in the ONNX Runtime version so a version bump naturally produces a new
 // cache filename rather than requiring a content-hash comparison.
-const Filename = "libonnxruntime-linux-amd64-1.28.0.so"
+const Filename = "libonnxruntime-linux-amd64-1.29.0.so"
