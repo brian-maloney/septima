@@ -19,7 +19,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 dest_dir="$repo_root/internal/ortlib/lib"
-version="1.28.0"
+version="1.29.0"
 
 goos="${1:-$(go env GOOS)}"
 goarch="${2:-$(go env GOARCH)}"
