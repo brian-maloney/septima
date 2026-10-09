@@ -11,4 +11,4 @@ numpy>=2.5.3
 pyyaml>=6.0.3
 # Dataset acquisition (optional, used by datasets/prepare.py):
 kaggle>=2.2.4
-roboflow>=1.5.0
+roboflow>=1.7.0
