@@ -3,12 +3,12 @@
 #   python3 -m venv training/.venv && source training/.venv/bin/activate
 #   pip install -r training/requirements.txt
 ultralytics>=8.4.176
-onnx>=1.23.0
-onnxruntime>=1.30.0
+onnx>=1.23.2
+onnxruntime>=1.31.0
 opencv-python-headless>=5.0.0.93
 pillow>=12.3.0
-numpy>=2.5.3
+numpy>=2.5.4
 pyyaml>=6.0.3
 # Dataset acquisition (optional, used by datasets/prepare.py):
 kaggle>=2.2.4
-roboflow>=1.5.0
+roboflow>=1.7.1
