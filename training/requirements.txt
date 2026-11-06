@@ -10,5 +10,5 @@ pillow>=12.3.0
 numpy>=2.5.4
 pyyaml>=6.0.3
 # Dataset acquisition (optional, used by datasets/prepare.py):
-kaggle>=2.2.4
+kaggle>=2.2.5
 roboflow>=1.7.1
